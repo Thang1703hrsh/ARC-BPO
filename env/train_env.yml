@@ -1,0 +1,36 @@
+name: TokenBPO-train
+channels:
+  - conda-forge
+# NOTE:
+# - PyTorch stopped publishing *official* conda binaries starting with v2.6.
+#   (see PyTorch 2.6 release notes / previous-versions docs)
+# - This env therefore uses pip wheels for torch/vision/audio.
+# - The +cu124 local version pins the CUDA 12.4 wheel variants explicitly.
+
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+      # Make CUDA 12.4 wheels discoverable while still using PyPI for everything else.
+      - --extra-index-url https://download.pytorch.org/whl/cu124
+
+      # PyTorch 2.6 (CUDA 12.4)
+      - torch==2.6.0+cu124
+      - torchvision==0.21.0+cu124
+      - torchaudio==2.6.0+cu124
+
+      # Core training stack used by this repo
+      - transformers==4.52.4
+      - datasets==3.5.0
+      - accelerate==1.7.0
+      - peft==0.14.0
+
+      # Config / logging
+      - hydra-core==1.3.2
+      - omegaconf==2.3.0
+      - wandb==0.20.1
+
+      # Utilities used in code
+      - tqdm
+      - langdetect==1.0.9
+      - sentencepiece==0.2.0

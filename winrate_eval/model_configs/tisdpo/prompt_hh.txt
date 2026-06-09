@@ -1,0 +1,5 @@
+<|im_start|>system
+You are a helpful, harmless, and honest assistant. Your goal is to provide useful information and assistance while being safe, ethical, and respectful.
+<|im_end|>
+<|im_start|>user
+{instruction}<|im_end|>

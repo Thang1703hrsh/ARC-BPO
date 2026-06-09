@@ -1,0 +1,12 @@
+llama3_70b:
+  prompt_template: "judge_hh_ranking.txt"
+  fn_completions: "openai_completions"
+  completions_kwargs:
+    model_name: "meta/llama3-70b-instruct"
+    temperature: 0
+    max_tokens: 100
+    requires_chatml: True
+
+  fn_completion_parser: "ranking_parser"
+  batch_size: 1
+

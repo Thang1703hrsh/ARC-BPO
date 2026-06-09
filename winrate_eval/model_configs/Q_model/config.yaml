@@ -1,0 +1,14 @@
+Q_model:
+  fn_completions: "vllm_local_completions"
+  completions_kwargs:
+    model_name: ""  # local path
+    model_kwargs:
+      dtype: float32
+      tensor_parallel_size: 1  # Number of GPUs
+      trust_remote_code: true
+      max_model_len: 4096
+    is_chatml_prompt: true  # If using chat format
+    max_new_tokens: 2048
+    temperature: 0.7
+    top_p: 0.9
+  prompt_template: "prompt_hh.txt"

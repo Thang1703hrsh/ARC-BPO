@@ -1,0 +1,36 @@
+<|im_start|>system
+You are an expert evaluator assessing summarization quality. Your task is to determine which summary better captures the key information from the source text while being concise, accurate, and coherent.
+<|im_end|>
+<|im_start|>user
+I want you to evaluate two summaries of a text post. Please rank them based on summarization quality, considering:
+- **Coverage**: Does the summary capture the most important information?
+- **Accuracy**: Is the summary factually consistent with the source?
+- **Conciseness**: Is the summary appropriately brief while retaining key points?
+- **Coherence**: Is the summary well-written and easy to understand?
+- **Faithfulness**: Does the summary stay true to the original's meaning and tone?
+
+Here is the original post:
+{
+    "instruction": """{instruction}""",
+}
+
+Here are the summaries from two models:
+[
+    {
+        "model": "model_1",
+        "answer": """{output_1}"""
+    },
+    {
+        "model": "model_2",
+        "answer": """{output_2}"""
+    }
+]
+
+Now please rank the models by the quality of their summaries, so that the model with rank 1 has the best summary. Return a list of the model names and ranks in this exact format:
+[
+    {'model': <model-name>, 'rank': <model-rank>},
+    {'model': <model-name>, 'rank': <model-rank>}
+]
+
+Your response must be a valid Python list and should contain nothing else because we will directly execute it in Python.
+<|im_end|>

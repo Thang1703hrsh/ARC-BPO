@@ -1,0 +1,108 @@
+# random seed for batch sampling
+seed: 0
+
+
+# the batch size for training; for FSDP, the batch size per GPU is batch_size / (grad_accumulation_steps * num_gpus)
+batch_size: 64
+
+# the batch size during evaluation and sampling, if enabled
+eval_batch_size: 16
+
+# debug mode (disables wandb, model checkpointing, etc.)
+debug: false
+
+# the port to use for FSDP
+fsdp_port: null
+
+datasets: HuggingFaceH4/ultrafeedback_binarized
+dataset_train_split: train_prefs
+dataset_test_split: test_prefs
+
+# not use these 2
+base_data_dir: null
+reverse_dataset: false
+
+# wandb configuration
+wandb:
+  enabled: true
+  entity: "Token_BPO"
+  project: "token_bpo"
+
+# to create the local run directory and cache models/datasets,
+#   we will try each of these directories in order; if none exist,
+#   we will create the last one and use it
+
+output_dir: "output"
+
+# whether or not to generate samples during evaluation; disable for FSDP/TensorParallel
+#   is recommended, because they are slow
+sample_during_eval: false
+
+# how many model samples to generate during evaluation
+n_eval_model_samples: 16
+
+# whether to eval at the very beginning of training
+do_first_eval: true
+
+# an OmegaConf resolver that returns the local run directory, calling a function in utils.py
+local_run_dir: ${get_local_run_dir:${exp_name},${output_dir}}
+
+# name for this experiment in the local run directory and on wandb
+exp_name: ${build_exp_name:${loss.name},${model.name_or_path},${datasets}}
+
+# the learning rate
+lr: 5e-7
+weight_decay: 0.0
+
+# number of steps to accumulate over for each batch
+#   (e.g. if batch_size=4 and gradient_accumulation_steps=2, then we will
+#   accumulate gradients over 2 microbatches of size 2)
+gradient_accumulation_steps: 2
+
+# the maximum gradient norm to clip to
+max_grad_norm: 10.0
+
+# the maximum allowed length for an input (prompt + response)
+max_length: 2048
+
+# the maximum allowed length for a prompt
+# not used
+max_prompt_length: 256
+
+# the number of epochs to train for; if null, must specify n_examples
+n_epochs: 1
+
+# the number of examples to train for; if null, must specify n_epochs
+n_examples: null
+
+# the number of examples to evaluate on (and sample from, if sample_during_eval is true)
+n_eval_examples: 64
+
+# the trainer class to use (e.g. BasicTrainer, FSDPTrainer, TensorParallelTrainer)
+trainer: FSDPTrainer
+
+# The optimizer to use; we use RMSprop because it works about as well as Adam and is more memory-efficient
+optimizer: RMSprop
+baseline_optimizer: AdamW
+scheduler: cosine
+
+baseline_lr: 1e-3
+baseline_weight_decay: 0.0
+
+# number of linear warmup steps for the learning rate
+warmup_ratio: 0.05
+
+# whether or not to use activation/gradient checkpointing
+activation_checkpointing: false
+
+# evaluate and save model every eval_every steps
+save_checkpoint: true
+
+# prevent wandb from logging more than once per minimum_log_interval_secs
+minimum_log_interval_secs: 1.0
+
+defaults:
+  - _self_
+  - model: blank # basic model configuration
+  - loss: Q_tbpo 
+

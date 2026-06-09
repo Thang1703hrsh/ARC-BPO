@@ -1,0 +1,18 @@
+name: arc_bpo
+
+# Finite Bradley-Terry margin target.
+delta_star: 2.0
+
+# Policy/reference log-ratio scale.
+beta: 0.1
+
+# One-sided chunk target shape.
+use_advantage_shape: false
+fallback_to_uniform_shape: true
+T: 2.0
+kappa: 2.0
+
+# SBA Bregman divergence.
+sba_lambda: 1.0
+sba_scale: 4.0
+exp_clip: 30.0

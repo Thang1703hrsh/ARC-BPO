@@ -1,0 +1,19 @@
+# Nvidia NIM API for DeepSeek-R1
+deepseek-ai/deepseek-r1:
+  - api_key: ""
+    base_url: ""
+
+# Nvidia NIM API for Llama3-70b
+meta/llama3-70b-instruct:
+  - api_key: ""
+    base_url: ""
+
+# DeepSeek v3 API
+deepseek-v3:
+  - api_key: ""
+    base_url: ""
+
+# Qwen3-235b-a22b API
+qwen/qwen3-235b-a22b:
+  - api_key: ""
+    base_url: ""

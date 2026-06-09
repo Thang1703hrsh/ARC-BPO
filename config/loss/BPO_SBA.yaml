@@ -1,0 +1,21 @@
+# BPO-SBA(λ): Sequence-level Bregman Preference Optimization with Scaled Basu's power divergence
+# This implements the pure odds ratio matching from the paper without any
+# token-level advantage weighting (unlike Q_tbpo or A_tbpo).
+name: BPO_SBA
+
+bregman_loss:
+  name: sba
+  lam: 0.5  # λ parameter - controls gradient weighting for confident vs uncertain samples
+  s: 4.0   # scaling to match DPO gradient at initialization (R_θ = 1)
+  # clip log R for numerical stability
+  l_logr: -30.0
+  u_logr: 30.0
+
+# the temperature parameter for BPO; lower values mean we care less about
+#   the reference model
+beta: 0.1
+
+# the noise parameter for conservative BPO; should be in range (0, 0.5); interpreted as
+#   the fraction of preference pairs that are flipped
+#   label_smoothing=0 is the original BPO loss
+label_smoothing: 0
