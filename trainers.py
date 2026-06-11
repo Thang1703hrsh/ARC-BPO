@@ -70,6 +70,35 @@ def _unwrap(m):
     return m.module if hasattr(m, "module") else m
 
 
+def _estimate_epoch_steps_fast(
+    hf_dataset_repo_names: Union[str, List[str]],
+    split: str,
+    n_epochs: int,
+    batch_size: int,
+    cache_dir: Optional[str] = None,
+    sft_mode: bool = False,
+) -> int:
+    """Cheap scheduler-step estimate without tokenizing the full dataset."""
+    import datasets
+
+    if isinstance(hf_dataset_repo_names, str):
+        repo_names = [hf_dataset_repo_names]
+    else:
+        repo_names = list(hf_dataset_repo_names)
+
+    total_examples = 0
+    for repo_name in repo_names:
+        ds = datasets.load_dataset(repo_name, split=split, cache_dir=cache_dir)
+        if sft_mode:
+            # SFT groups duplicate prompts in get_dataset_from_hf, so raw rows are
+            # a slight upper bound. Preference training has one pair per raw row.
+            total_examples += len({example["chosen"][0]["content"] for example in ds})
+        else:
+            total_examples += len(ds)
+
+    return max(1, math.ceil(total_examples * n_epochs / batch_size))
+
+
 class BasicTrainer(object):
     def __init__(
         self,
@@ -109,36 +138,27 @@ class BasicTrainer(object):
             max_length=config.max_length,
             sft_mode=config.loss.name == "sft",
             seed=seed,
+            # Deterministic chunker floor/ceiling for ARC-BPO (experiments.md: min 4 / max 64).
+            min_tokens_per_chunk=int(getattr(config.loss, "min_tokens_per_chunk", 4)),
+            max_tokens_per_chunk=int(getattr(config.loss, "max_tokens_per_chunk", 64)),
         )
 
         if self.config.n_examples is not None:
             # exact given how your iterator yields full batches
             total_steps = math.ceil(self.config.n_examples / self.config.batch_size)
         elif self.config.n_epochs is not None:
-            # exact: count yielded batches (accounts for max_length filtering)
-            if self.rank == 0:
-                rank0_print("Counting train iterator to set total_steps (exact)...")
-                counting_iter = get_batch_iterator(
-                    **data_iterator_kwargs,
-                    split=self.config.dataset_train_split,
-                    n_epochs=self.config.n_epochs,
-                    n_examples=None,
-                    batch_size=self.config.batch_size,
-                    silent=True,  # don't spam logs
-                )
-                total_steps = sum(1 for _ in counting_iter)
-            else:
-                total_steps = 0
-            # share with all ranks (FSDP)
-            if self.world_size > 1 and dist.is_initialized():
-                device = (
-                    torch.device(f"cuda:{self.rank}")
-                    if torch.cuda.is_available()
-                    else torch.device("cpu")
-                )
-                t = torch.tensor([total_steps], device=device, dtype=torch.long)
-                dist.broadcast(t, src=0)
-                total_steps = int(t.item())
+            # Avoid materializing/tokenizing the full train iterator before FSDP
+            # setup. On large full-data runs, rank 0 can spend >10 minutes
+            # counting while other ranks block in NCCL broadcast and time out.
+            rank0_print("Estimating total_steps from raw dataset length...")
+            total_steps = _estimate_epoch_steps_fast(
+                self.config.datasets,
+                split=self.config.dataset_train_split,
+                n_epochs=self.config.n_epochs,
+                batch_size=self.config.batch_size,
+                cache_dir=getattr(self.config, "cache_dir", None),
+                sft_mode=self.config.loss.name == "sft",
+            )
         else:
             raise ValueError("Need either n_examples or n_epochs to compute total_steps")
         self.total_steps = int(total_steps)
@@ -159,17 +179,22 @@ class BasicTrainer(object):
             silent=rank != 0,
         )
         rank0_print("Loaded train data iterator")
-        self.eval_iterator = get_batch_iterator(
-            **data_iterator_kwargs,
-            split=config.dataset_test_split,
-            n_examples=config.n_eval_examples,
-            batch_size=config.eval_batch_size,
-            silent=rank != 0,
-        )
-        self.eval_batches = list(self.eval_iterator)
-        rank0_print(
-            f"Loaded {len(self.eval_batches)} eval batches of size {config.eval_batch_size}"
-        )
+        if int(config.n_eval_examples) > 0:
+            self.eval_iterator = get_batch_iterator(
+                **data_iterator_kwargs,
+                split=config.dataset_test_split,
+                n_examples=config.n_eval_examples,
+                batch_size=config.eval_batch_size,
+                silent=rank != 0,
+            )
+            self.eval_batches = list(self.eval_iterator)
+            rank0_print(
+                f"Loaded {len(self.eval_batches)} eval batches of size {config.eval_batch_size}"
+            )
+        else:
+            self.eval_iterator = None
+            self.eval_batches = []
+            rank0_print("Training eval disabled because n_eval_examples <= 0")
 
     def get_batch_samples(self, batch: Dict[str, torch.LongTensor]) -> Tuple[str, str]:
         """Generate samples from the policy (and reference model, if doing DPO training) for the given batch of inputs."""
@@ -1285,7 +1310,7 @@ class BasicTrainer(object):
             # if self.batch_counter == 0:
             #     capture_memory_snapshot(self.rank, step=self.batch_counter, output_dir=self.run_dir)
 
-            if self.example_counter % self.eval_every == 0 and (
+            if self.eval_batches and self.example_counter % self.eval_every == 0 and (
                 self.example_counter > 0 or self.config.do_first_eval
             ):
                 rank0_print(f"Running evaluation after {self.example_counter} train examples")
@@ -1704,19 +1729,33 @@ class FSDPTrainer(BasicTrainer):
             underlying = self.policy.module
 
             if use_lora:
-                from peft import get_peft_model_state_dict
-
                 adapter_dir = os.path.join(model_save_dir, "adapter")
                 os.makedirs(adapter_dir, exist_ok=True)
 
-                # Filter the gathered FULL state dict down to adapter-only weights :contentReference[oaicite:4]{index=4}
-                adapter_state = get_peft_model_state_dict(underlying, state_dict=policy_state_dict)
+                # Let PEFT filter the full FSDP state dict itself. Passing an
+                # already-filtered adapter state can be filtered a second time
+                # by PEFT and produce an empty 40-byte safetensors file.
+                lora_keys = [k for k in policy_state_dict if "lora_" in k]
+                if not lora_keys:
+                    sample_keys = list(policy_state_dict.keys())[:20]
+                    raise RuntimeError(
+                        "LoRA save requested but no lora_ tensors were found in "
+                        f"the gathered FSDP state dict. Sample keys: {sample_keys}"
+                    )
+                print(f"[SAVE] Found {len(lora_keys)} LoRA tensors in full state dict.")
 
                 underlying.save_pretrained(
                     adapter_dir,
                     safe_serialization=True,
-                    state_dict=adapter_state,
+                    state_dict=policy_state_dict,
                 )
+                adapter_file = os.path.join(adapter_dir, "adapter_model.safetensors")
+                if os.path.isfile(adapter_file) and os.path.getsize(adapter_file) <= 1024:
+                    raise RuntimeError(
+                        f"Saved LoRA adapter is unexpectedly small "
+                        f"({os.path.getsize(adapter_file)} bytes): {adapter_file}. "
+                        "The adapter state was not written correctly."
+                    )
             else:
                 # Full model save (HF format)
                 underlying.save_pretrained(

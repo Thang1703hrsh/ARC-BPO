@@ -99,10 +99,42 @@ def _split_long_spans(spans: Sequence[Span], max_tokens_per_chunk: int | None) -
     return split_spans
 
 
+def _merge_short_spans(spans: Sequence[Span], min_tokens_per_chunk: int | None) -> List[Span]:
+    """Merge sub-floor fragments forward so every chunk has >= min tokens.
+
+    Spans must already be contiguous. The last span may absorb the trailing
+    short fragment; if the final span is still short it is merged backward so no
+    chunk falls below the floor (unless the whole response is shorter).
+    """
+    if min_tokens_per_chunk is None or min_tokens_per_chunk <= 1:
+        return list(spans)
+    if not spans:
+        return list(spans)
+
+    merged: List[Span] = []
+    cur_start, cur_end = spans[0]
+    for start, end in spans[1:]:
+        if (cur_end - cur_start) < min_tokens_per_chunk:
+            cur_end = end
+        else:
+            merged.append((cur_start, cur_end))
+            cur_start, cur_end = start, end
+    merged.append((cur_start, cur_end))
+
+    # If the final chunk is still below the floor, fold it into its predecessor.
+    if len(merged) > 1 and (merged[-1][1] - merged[-1][0]) < min_tokens_per_chunk:
+        last_start, last_end = merged.pop()
+        prev_start, _ = merged.pop()
+        merged.append((prev_start, last_end))
+
+    return merged
+
+
 def chunk_response_tokens(
     response: Union[str, dict, Sequence[dict]],
     tokenizer,
     max_tokens_per_chunk: int | None = None,
+    min_tokens_per_chunk: int | None = None,
 ) -> List[Span]:
     """Chunk one response into tokenizer-aligned token spans.
 
@@ -128,6 +160,7 @@ def chunk_response_tokens(
         if end > start
     ]
     spans = _split_long_spans(spans, max_tokens_per_chunk)
+    spans = _merge_short_spans(spans, min_tokens_per_chunk)
 
     if not spans:
         return [(0, token_count)]
@@ -143,16 +176,19 @@ def chunk_preference_pair(
     rejected: Union[str, dict, Sequence[dict]],
     tokenizer,
     max_tokens_per_chunk: int | None = None,
+    min_tokens_per_chunk: int | None = None,
 ) -> dict:
     return {
         "chosen_chunk_spans": chunk_response_tokens(
             chosen,
             tokenizer,
             max_tokens_per_chunk=max_tokens_per_chunk,
+            min_tokens_per_chunk=min_tokens_per_chunk,
         ),
         "rejected_chunk_spans": chunk_response_tokens(
             rejected,
             tokenizer,
             max_tokens_per_chunk=max_tokens_per_chunk,
+            min_tokens_per_chunk=min_tokens_per_chunk,
         ),
     }

@@ -38,10 +38,11 @@ class ArcBPOTest(unittest.TestCase):
     def test_detached_advantage_targets(self):
         chosen_adv = torch.tensor([0.0, 2.0], requires_grad=True)
         rejected_adv = torch.tensor([3.0, -1.0, 0.5], requires_grad=True)
+        delta_star = torch.tensor(1.5, requires_grad=True)
         tau_w, tau_l, pi_w, rho_l = construct_arc_bpo_one_sided_targets(
             2,
             3,
-            1.5,
+            delta_star,
             chosen_advantages=chosen_adv,
             rejected_advantages=rejected_adv,
             use_advantage_shape=True,
@@ -60,6 +61,7 @@ class ArcBPOTest(unittest.TestCase):
         loss.backward()
 
         self.assertLess(chosen_a.grad.item(), 0.0)
+        self.assertEqual(rejected_a.grad.item(), 0.0)
 
         chosen_a = torch.tensor([2.0], requires_grad=True)
         rejected_a = torch.tensor([-1.0], requires_grad=True)
@@ -103,22 +105,28 @@ class ArcBPOTest(unittest.TestCase):
         self.assertTrue(torch.allclose(tau_w, torch.full((4,), 0.25)))
         self.assertTrue(torch.allclose(tau_l, torch.full((2,), -0.5)))
 
-    def test_arc_bpo_does_not_use_tbpo_w_or_value_head(self):
+    def test_arc_bpo_does_not_use_tbpo_w_value_head_or_token_matching(self):
         loss_source = inspect.getsource(arc_bpo_pair_loss)
-        self.assertNotIn("log_w", loss_source)
-        self.assertNotIn("baseline_head", loss_source)
-        self.assertNotIn("compute_tbpo_loss_mask", loss_source)
-        self.assertNotIn("Q_tbpo_get_batch_logps", loss_source)
 
         trainer_source = pathlib.Path("trainers.py").read_text(encoding="utf-8")
         method_start = trainer_source.index("def arc_bpo_concatenated_forward")
         method_end = trainer_source.index("def get_batch_metrics", method_start)
         method_source = trainer_source[method_start:method_end]
 
-        self.assertNotIn("log_w", method_source)
-        self.assertNotIn("baseline_head", method_source)
-        self.assertNotIn("compute_tbpo_loss_mask", method_source)
-        self.assertNotIn("Q_tbpo_get_batch_logps", method_source)
+        forbidden_symbols = (
+            "log_w",
+            "w_t",
+            "w_ij",
+            "baseline_head",
+            "value_head",
+            "compute_tbpo_loss_mask",
+            "Q_tbpo_get_batch_logps",
+            "A_tbpo_get_batch_logps",
+            "loss_mask",
+        )
+        for source in (loss_source, method_source):
+            for symbol in forbidden_symbols:
+                self.assertNotIn(symbol, source)
 
 
 if __name__ == "__main__":

@@ -2,6 +2,7 @@ import importlib.util
 import inspect
 import os
 import random
+import re
 import socket
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Type, Union
@@ -17,20 +18,30 @@ def get_open_port():
         return s.getsockname()[1]  # return only the port number
 
 
+def _sanitize_for_dirname(name: str) -> str:
+    """Replace filesystem-unsafe characters so the name is a single dir level.
+
+    Dataset ids like ``princeton-nlp/llama3-ultrafeedback-armorm`` contain ``/``
+    which would otherwise split the run dir into nested folders. Any character
+    outside ``[A-Za-z0-9._-]`` is collapsed to ``__``.
+    """
+    return re.sub(r"[^A-Za-z0-9._-]+", "__", str(name)).strip("_")
+
+
 def build_exp_name(
     loss_name: str,
     model_name: str,
     dataset: str,
 ) -> str:
     """Build experiment name by combining loss name, model name, and dataset name(s)."""
-    # Extract the model name without path
+    # Extract the model name without path, then sanitize each part so the
+    # resulting experiment name is a single, filesystem-safe directory level.
     model_short_name = model_name.split("/")[-1]
+    loss_part = _sanitize_for_dirname(loss_name)
+    model_part = _sanitize_for_dirname(model_short_name)
+    dataset_part = _sanitize_for_dirname(dataset)
 
-    # import ipdb; ipdb.set_trace()
-    if loss_name == "tisdpo":
-        return f"{loss_name}_{model_short_name}_{dataset}"
-
-    return f"{loss_name}_{model_short_name}_{dataset}"
+    return f"{loss_part}_{model_part}_{dataset_part}"
 
 
 def rank0_print(*args, **kwargs):
@@ -152,11 +163,17 @@ def init_distributed(
     master_addr: str = "localhost",
     port: int = 12355,
     backend: str = "nccl",
+    timeout_minutes: int = 120,
 ):
     print(rank, "initializing distributed")
     os.environ["MASTER_ADDR"] = master_addr
     os.environ["MASTER_PORT"] = str(port)
-    dist.init_process_group(backend, rank=rank, world_size=world_size)
+    dist.init_process_group(
+        backend,
+        rank=rank,
+        world_size=world_size,
+        timeout=timedelta(minutes=timeout_minutes),
+    )
     torch.cuda.set_device(rank)
 
 

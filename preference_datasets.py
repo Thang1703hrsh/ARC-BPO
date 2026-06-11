@@ -12,6 +12,26 @@ from arc_bpo_chunking import chunk_preference_pair
 from utils import TemporarilySeededRandom
 
 
+def _distribute_score_over_chunks(
+    response_score: Optional[float],
+    chunk_spans: List,
+) -> Optional[List[float]]:
+    """Spread one response-level reward score across its chunks.
+
+    Each chunk receives a share proportional to its token length, so the
+    per-chunk advantages sum back to the response score. Returns None if there
+    is no score (the loss then falls back to a uniform shape for this response).
+    This is a detached, deterministic data-side proxy (spec sec. 7).
+    """
+    if response_score is None or not chunk_spans:
+        return None
+    total_tokens = sum(end - start for start, end in chunk_spans)
+    if total_tokens <= 0:
+        return None
+    score = float(response_score)
+    return [score * (end - start) / total_tokens for start, end in chunk_spans]
+
+
 def _find_subsequence(sequence: List[int], subsequence: List[int], start: int = 0) -> Optional[int]:
     if not subsequence:
         return start
@@ -94,6 +114,13 @@ def get_dataset_from_hf(
         data[prompt_str]["responses"].extend(responses)
         data[prompt_str]["sft_target"] = [chosen]
 
+        # Optional response-level reward scores (e.g. ArmoRM in
+        # princeton-nlp/llama3-ultrafeedback-armorm). Kept aligned with
+        # `responses` so each response index has a matching score (or None).
+        chosen_score = example.get("score_chosen")
+        rejected_score = example.get("score_rejected")
+        data[prompt_str]["response_scores"].extend([chosen_score, rejected_score])
+
     return data
 
 
@@ -103,6 +130,10 @@ def tokenize_batch_element(
     rejected: list[dict],
     tokenizer,
     max_length: int,
+    max_tokens_per_chunk: int = 64,
+    min_tokens_per_chunk: int = 4,
+    chosen_score: Optional[float] = None,
+    rejected_score: Optional[float] = None,
 ) -> Optional[Dict]:
     """Tokenize a single batch element"""
     assert len(prompt) == 1 and len(chosen) == 1 and len(rejected) == 1
@@ -162,7 +193,13 @@ def tokenize_batch_element(
         tokenizer,
     )
 
-    chunk_spans = chunk_preference_pair(chosen, rejected, tokenizer)
+    chunk_spans = chunk_preference_pair(
+        chosen,
+        rejected,
+        tokenizer,
+        max_tokens_per_chunk=max_tokens_per_chunk,
+        min_tokens_per_chunk=min_tokens_per_chunk,
+    )
 
     # discard the sample if too long
     longer_response_length = max(
@@ -190,6 +227,14 @@ def tokenize_batch_element(
     batch["rejected_response_only"] = rejected
     batch["chosen_chunk_spans"] = chunk_spans["chosen_chunk_spans"]
     batch["rejected_chunk_spans"] = chunk_spans["rejected_chunk_spans"]
+    # Detached per-chunk advantage proxy from response-level reward scores
+    # (e.g. ArmoRM). None when the dataset has no scores -> uniform fallback.
+    batch["chosen_adv_proxy"] = _distribute_score_over_chunks(
+        chosen_score, chunk_spans["chosen_chunk_spans"]
+    )
+    batch["rejected_adv_proxy"] = _distribute_score_over_chunks(
+        rejected_score, chunk_spans["rejected_chunk_spans"]
+    )
     batch["chosen_response_token_start"] = chosen_response_start
     batch["chosen_response_token_end"] = chosen_response_end
     batch["rejected_response_token_start"] = rejected_response_start
@@ -278,6 +323,8 @@ def get_batch_iterator(
     seed: int = 0,
     silent: bool = False,
     cache_dir: Optional[str] = None,
+    min_tokens_per_chunk: int = 4,
+    max_tokens_per_chunk: int = 64,
 ) -> Iterator[Dict]:
     assert n_epochs is not None or n_examples is not None, (
         "Must specify either n_epochs or n_examples"
@@ -303,6 +350,7 @@ def get_batch_iterator(
                     data["responses"],
                     data["pairs"],
                     data["sft_target"],
+                    data.get("response_scores", []),
                 )
             )
 
@@ -327,6 +375,7 @@ def get_batch_iterator(
             responses,
             pairs,
             sft_target,
+            response_scores,
         ) in flat_data:
             if done:
                 break
@@ -337,6 +386,8 @@ def get_batch_iterator(
                     sft_target,
                     tokenizer,
                     max_length,
+                    max_tokens_per_chunk=max_tokens_per_chunk,
+                    min_tokens_per_chunk=min_tokens_per_chunk,
                 )
                 if batch_element is None:
                     continue
@@ -355,12 +406,22 @@ def get_batch_iterator(
                 for index, p in enumerate(pairs):
                     if done:
                         break
+                    chosen_score = (
+                        response_scores[p[0]] if p[0] < len(response_scores) else None
+                    )
+                    rejected_score = (
+                        response_scores[p[1]] if p[1] < len(response_scores) else None
+                    )
                     batch_element = tokenize_batch_element(
                         prompt_dict,
                         responses[p[0]],
                         responses[p[1]],
                         tokenizer,
                         max_length,
+                        max_tokens_per_chunk=max_tokens_per_chunk,
+                        min_tokens_per_chunk=min_tokens_per_chunk,
+                        chosen_score=chosen_score,
+                        rejected_score=rejected_score,
                     )
                     if batch_element is None:
                         continue

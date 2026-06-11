@@ -16,3 +16,7 @@ kappa: 2.0
 sba_lambda: 1.0
 sba_scale: 4.0
 exp_clip: 30.0
+
+# Deterministic chunker floor/ceiling (experiments.md: min 4 / max 64 tokens).
+min_tokens_per_chunk: 4
+max_tokens_per_chunk: 64
