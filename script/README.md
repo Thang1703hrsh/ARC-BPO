@@ -106,21 +106,6 @@ find output -name LATEST
 
 ## 4. Llama Runs
 
-10k examples:
-
-```bash
-GPU_IDS=0,1,2,3 \
-N_EXAMPLES=10000 \
-BATCH_SIZE=64 \
-GRAD_ACCUM=4 \
-N_EVAL_EXAMPLES=0 \
-DO_FIRST_EVAL=false \
-USE_LORA=true \
-HF_REPO_ID=ducthang1703/llama3-arc-bpo-uniform-lora-10k-bs64 \
-HF_PRIVATE=false \
-bash script/train/arc_bpo_llama.sh
-```
-
 Full train split:
 
 ```bash
@@ -140,20 +125,6 @@ Llama uses `princeton-nlp/llama3-ultrafeedback-armorm` with splits `train` and
 
 ## 5. Mistral Runs
 
-10k examples:
-
-```bash
-GPU_IDS=0,1,2,3 \
-N_EXAMPLES=10000 \
-BATCH_SIZE=64 \
-GRAD_ACCUM=4 \
-N_EVAL_EXAMPLES=0 \
-DO_FIRST_EVAL=false \
-USE_LORA=true \
-HF_REPO_ID=ducthang1703/mistral-arc-bpo-uniform-lora-10k \
-HF_PRIVATE=false \
-bash script/train/arc_bpo_mistral.sh
-```
 
 Full train split:
 
@@ -174,21 +145,6 @@ Mistral uses `HuggingFaceH4/ultrafeedback_binarized` with splits
 `HuggingFaceH4/mistral-7b-sft-alpha`.
 
 ## 6. Qwen2.5 Runs
-
-10k examples:
-
-```bash
-GPU_IDS=0,1,2,3 \
-N_EXAMPLES=10000 \
-BATCH_SIZE=64 \
-GRAD_ACCUM=4 \
-N_EVAL_EXAMPLES=0 \
-DO_FIRST_EVAL=false \
-USE_LORA=true \
-HF_REPO_ID=ducthang1703/qwen25-7b-instruct-arc-bpo-uniform-lora-10k \
-HF_PRIVATE=false \
-bash script/train/arc_bpo_qwen.sh
-```
 
 Full train split:
 
