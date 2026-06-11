@@ -1,28 +1,8 @@
 # ARC-BPO Script Guide
 
-This folder contains shell entrypoints for running ARC-BPO training and
-evaluation outside Modal, for example on a rented SSH server.
-
-The three main ARC-BPO training scripts are:
-
-| Script | Model config | Base model | Default dataset |
-| --- | --- | --- | --- |
-| `train/arc_bpo_llama.sh` | `llama_8b` | `RLHFlow/LLaMA3-SFT-v2` | `princeton-nlp/llama3-ultrafeedback-armorm` |
-| `train/arc_bpo_mistral.sh` | `mistral_7b` | `HuggingFaceH4/mistral-7b-sft-alpha` | `HuggingFaceH4/ultrafeedback_binarized` |
-| `train/arc_bpo_qwen.sh` | `qwen2_5_7b_instruct` | `Qwen/Qwen2.5-7B-Instruct` | `HuggingFaceH4/ultrafeedback_binarized` |
-
-All three scripts run ARC-BPO with LoRA by default, W&B disabled, FSDPTrainer,
-activation checkpointing, response length `MAX_LENGTH=2048`, and uniform
-ARC-BPO chunk shape (`USE_ADVANTAGE_SHAPE=false`).
-
 ## 1. Server Setup
 
-On a new Linux GPU server:
-
 ```bash
-git clone <your-repo-url> ARC-BPO
-cd ARC-BPO
-
 conda create -n arc-bpo python=3.10 -y
 conda activate arc-bpo
 
@@ -43,33 +23,6 @@ Alternatively:
 ```bash
 export HF_TOKEN="hf_xxx"
 ```
-
-## 2. Important Variables
-
-All scripts are configured through environment variables.
-
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `GPU_IDS` | `0` | Comma-separated GPUs, for example `0,1,2,3`. |
-| `N_EXAMPLES` | empty | If set, train on exactly this many examples instead of full epochs. |
-| `N_EPOCHS` | `1` | Number of epochs when `N_EXAMPLES` is empty. |
-| `BATCH_SIZE` | auto | Global batch size. Must divide by `GRAD_ACCUM * NUM_GPUS`. |
-| `GRAD_ACCUM` | `4` | Gradient accumulation steps. Higher value lowers per-GPU memory. |
-| `PER_GPU_MICROBATCH` | `2` | Used only when `BATCH_SIZE` is not set. |
-| `N_EVAL_EXAMPLES` | `64` | Set to `0` to disable internal train-time eval metrics. |
-| `DO_FIRST_EVAL` | `true` | Set to `false` to skip eval before training. |
-| `USE_LORA` | `true` | Use LoRA. Set `false` for full fine-tuning. |
-| `OUTPUT_DIR` | `<repo>/output` | Local training outputs and checkpoints. |
-| `LOG_DIR` | `<output>/logs` | Training logs saved with `tee`. |
-
-The real memory knob is:
-
-```text
-per_gpu_microbatch = BATCH_SIZE / GRAD_ACCUM / NUM_GPUS
-```
-
-If you hit CUDA OOM, lower `BATCH_SIZE`, raise `GRAD_ACCUM`, or lower
-`MAX_LENGTH`.
 
 ## 3. Quick Smoke Tests
 
