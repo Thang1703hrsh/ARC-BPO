@@ -76,21 +76,6 @@ find output/train_runs -name LATEST
 
 ## 4. Llama Runs
 
-10k examples, matching the Modal-style run:
-
-```bash
-GPU_IDS=0,1,2,3 \
-N_EXAMPLES=10000 \
-BATCH_SIZE=64 \
-GRAD_ACCUM=4 \
-N_EVAL_EXAMPLES=0 \
-DO_FIRST_EVAL=false \
-USE_LORA=true \
-HF_REPO_ID=ducthang1703/llama3-arc-bpo-uniform-lora-10k-bs64 \
-HF_PRIVATE=false \
-bash script/train/arc_bpo_llama.sh
-```
-
 Full train split:
 
 ```bash
@@ -120,26 +105,13 @@ GRAD_ACCUM=4 \
 N_EVAL_EXAMPLES=0 \
 DO_FIRST_EVAL=false \
 USE_LORA=false \
-HF_REPO_ID=ducthang1703/llama3-arc-bpo-uniform-full-10k \
+HF_REPO_ID=ducthang1703/llama3-arc-bpo-uniform-full \
 HF_PRIVATE=false \
 HF_UPLOAD_ADAPTER_ONLY=false \
 bash script/train/arc_bpo_llama.sh
 ```
 
 ## 5. Mistral Runs
-
-10k examples:
-
-```bash
-GPU_IDS=0,1,2,3 \
-N_EXAMPLES=10000 \
-BATCH_SIZE=64 \
-GRAD_ACCUM=4 \
-N_EVAL_EXAMPLES=0 \
-DO_FIRST_EVAL=false \
-USE_LORA=true \
-bash script/train/arc_bpo_mistral.sh
-```
 
 Full train split:
 
@@ -157,19 +129,6 @@ Mistral uses `HuggingFaceH4/ultrafeedback_binarized` with splits
 `train_prefs` and `test_prefs`.
 
 ## 6. Qwen2.5 Runs
-
-10k examples:
-
-```bash
-GPU_IDS=0,1,2,3 \
-N_EXAMPLES=10000 \
-BATCH_SIZE=64 \
-GRAD_ACCUM=4 \
-N_EVAL_EXAMPLES=0 \
-DO_FIRST_EVAL=false \
-USE_LORA=true \
-bash script/train/arc_bpo_qwen.sh
-```
 
 Full train split:
 
