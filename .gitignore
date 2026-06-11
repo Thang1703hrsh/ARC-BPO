@@ -7,5 +7,5 @@ model_hub/
 *.out
 logs/
 
-# Local Modal launch/eval scripts
-modal_*.py
+# # Local Modal launch/eval scripts
+# modal_*.py
