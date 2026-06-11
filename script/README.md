@@ -95,22 +95,6 @@ bash script/train/arc_bpo_llama.sh
 `LATEST/adapter` by default and checks that the adapter is not an empty 40-byte
 file.
 
-For full fine-tuning:
-
-```bash
-GPU_IDS=0,1,2,3 \
-N_EXAMPLES=10000 \
-BATCH_SIZE=16 \
-GRAD_ACCUM=4 \
-N_EVAL_EXAMPLES=0 \
-DO_FIRST_EVAL=false \
-USE_LORA=false \
-HF_REPO_ID=ducthang1703/llama3-arc-bpo-uniform-full \
-HF_PRIVATE=false \
-HF_UPLOAD_ADAPTER_ONLY=false \
-bash script/train/arc_bpo_llama.sh
-```
-
 ## 5. Mistral Runs
 
 Full train split:
