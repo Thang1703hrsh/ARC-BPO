@@ -8,7 +8,7 @@ import torch
 import tqdm
 from torch.nn.utils.rnn import pad_sequence
 
-from arc_bpo_chunking import chunk_preference_pair
+from arc_bpo_chunking import chunk_preference_pair, retarget_chunk_spans_to_length
 from utils import TemporarilySeededRandom
 
 
@@ -77,6 +77,15 @@ def _response_mask(length: int, start: int, end: int) -> List[int]:
     for idx in range(start, end):
         mask[idx] = 1
     return mask
+
+
+def _shifted_response_logprob_length(labels: List[int], response_mask: List[int]) -> int:
+    """Count response tokens that survive next-token shift and label masking."""
+    return sum(
+        1
+        for label, is_response in zip(labels[1:], response_mask[1:])
+        if is_response and label != -100
+    )
 
 
 def get_dataset_from_hf(
@@ -218,6 +227,36 @@ def tokenize_batch_element(
         prompt_sequence_tokens["input_ids"]
     )
 
+    chosen_response_mask = _response_mask(
+        len(chosen_sequence_tokens["input_ids"]),
+        chosen_response_start,
+        chosen_response_end,
+    )
+    rejected_response_mask = _response_mask(
+        len(rejected_sequence_tokens["input_ids"]),
+        rejected_response_start,
+        rejected_response_end,
+    )
+    chosen_response_logprob_len = _shifted_response_logprob_length(
+        chosen_sequence_tokens["labels"],
+        chosen_response_mask,
+    )
+    rejected_response_logprob_len = _shifted_response_logprob_length(
+        rejected_sequence_tokens["labels"],
+        rejected_response_mask,
+    )
+    if chosen_response_logprob_len == 0 or rejected_response_logprob_len == 0:
+        return None
+
+    chunk_spans["chosen_chunk_spans"] = retarget_chunk_spans_to_length(
+        chunk_spans["chosen_chunk_spans"],
+        chosen_response_logprob_len,
+    )
+    chunk_spans["rejected_chunk_spans"] = retarget_chunk_spans_to_length(
+        chunk_spans["rejected_chunk_spans"],
+        rejected_response_logprob_len,
+    )
+
     batch = {}
 
     batch["prompt"] = prompt
@@ -239,16 +278,8 @@ def tokenize_batch_element(
     batch["chosen_response_token_end"] = chosen_response_end
     batch["rejected_response_token_start"] = rejected_response_start
     batch["rejected_response_token_end"] = rejected_response_end
-    batch["chosen_response_mask"] = _response_mask(
-        len(chosen_sequence_tokens["input_ids"]),
-        chosen_response_start,
-        chosen_response_end,
-    )
-    batch["rejected_response_mask"] = _response_mask(
-        len(rejected_sequence_tokens["input_ids"]),
-        rejected_response_start,
-        rejected_response_end,
-    )
+    batch["chosen_response_mask"] = chosen_response_mask
+    batch["rejected_response_mask"] = rejected_response_mask
 
     for k, toks in {
         "chosen": chosen_sequence_tokens,

@@ -12,7 +12,7 @@ pip install -r requirements.txt
 ```
 
 Login to Hugging Face so the server can download models/datasets. This is also
-needed if you want the Llama script to upload the final checkpoint.
+needed if you want the train scripts to upload the final checkpoint.
 
 ```bash
 huggingface-cli login
@@ -23,6 +23,36 @@ Alternatively:
 ```bash
 export HF_TOKEN="hf_xxx"
 ```
+
+## 2. Hugging Face Upload
+
+All three ARC-BPO train scripts can optionally upload the final checkpoint:
+
+```text
+script/train/arc_bpo_llama.sh
+script/train/arc_bpo_mistral.sh
+script/train/arc_bpo_qwen.sh
+```
+
+Leave `HF_REPO_ID` empty to keep local-only behavior. Set it to upload after a
+successful train:
+
+```bash
+HF_REPO_ID=ducthang1703/my-model-name
+HF_PRIVATE=false
+HF_UPLOAD_ADAPTER_ONLY=true
+```
+
+With `USE_LORA=true` and `HF_UPLOAD_ADAPTER_ONLY=true`, the scripts upload:
+
+```text
+output/<run_name>/LATEST/adapter
+```
+
+The upload step checks that `adapter_config.json` exists and that
+`adapter_model.safetensors` is not an empty tiny file. With `USE_LORA=false`, or
+with `HF_UPLOAD_ADAPTER_ONLY=false`, the scripts upload the whole `LATEST`
+folder.
 
 ## 3. Quick Smoke Tests
 
@@ -71,10 +101,25 @@ After the smoke test, check:
 
 ```bash
 ls output/logs
-find output/train_runs -name LATEST
+find output -name LATEST
 ```
 
 ## 4. Llama Runs
+
+10k examples:
+
+```bash
+GPU_IDS=0,1,2,3 \
+N_EXAMPLES=10000 \
+BATCH_SIZE=64 \
+GRAD_ACCUM=4 \
+N_EVAL_EXAMPLES=0 \
+DO_FIRST_EVAL=false \
+USE_LORA=true \
+HF_REPO_ID=ducthang1703/llama3-arc-bpo-uniform-lora-10k-bs64 \
+HF_PRIVATE=false \
+bash script/train/arc_bpo_llama.sh
+```
 
 Full train split:
 
@@ -90,12 +135,25 @@ HF_PRIVATE=false \
 bash script/train/arc_bpo_llama.sh
 ```
 
-`arc_bpo_llama.sh` can upload to Hugging Face after training. If
-`HF_REPO_ID` is empty, it only saves locally. With `USE_LORA=true`, it uploads
-`LATEST/adapter` by default and checks that the adapter is not an empty 40-byte
-file.
+Llama uses `princeton-nlp/llama3-ultrafeedback-armorm` with splits `train` and
+`test`, initialized from `RLHFlow/LLaMA3-SFT-v2`.
 
 ## 5. Mistral Runs
+
+10k examples:
+
+```bash
+GPU_IDS=0,1,2,3 \
+N_EXAMPLES=10000 \
+BATCH_SIZE=64 \
+GRAD_ACCUM=4 \
+N_EVAL_EXAMPLES=0 \
+DO_FIRST_EVAL=false \
+USE_LORA=true \
+HF_REPO_ID=ducthang1703/mistral-arc-bpo-uniform-lora-10k \
+HF_PRIVATE=false \
+bash script/train/arc_bpo_mistral.sh
+```
 
 Full train split:
 
@@ -106,13 +164,31 @@ GRAD_ACCUM=4 \
 N_EVAL_EXAMPLES=0 \
 DO_FIRST_EVAL=false \
 USE_LORA=true \
+HF_REPO_ID=ducthang1703/mistral-arc-bpo-uniform-lora-full \
+HF_PRIVATE=false \
 bash script/train/arc_bpo_mistral.sh
 ```
 
 Mistral uses `HuggingFaceH4/ultrafeedback_binarized` with splits
-`train_prefs` and `test_prefs`.
+`train_prefs` and `test_prefs`, initialized from
+`HuggingFaceH4/mistral-7b-sft-alpha`.
 
 ## 6. Qwen2.5 Runs
+
+10k examples:
+
+```bash
+GPU_IDS=0,1,2,3 \
+N_EXAMPLES=10000 \
+BATCH_SIZE=64 \
+GRAD_ACCUM=4 \
+N_EVAL_EXAMPLES=0 \
+DO_FIRST_EVAL=false \
+USE_LORA=true \
+HF_REPO_ID=ducthang1703/qwen25-7b-instruct-arc-bpo-uniform-lora-10k \
+HF_PRIVATE=false \
+bash script/train/arc_bpo_qwen.sh
+```
 
 Full train split:
 
@@ -123,8 +199,13 @@ GRAD_ACCUM=4 \
 N_EVAL_EXAMPLES=0 \
 DO_FIRST_EVAL=false \
 USE_LORA=true \
+HF_REPO_ID=ducthang1703/qwen25-7b-instruct-arc-bpo-uniform-lora-full \
+HF_PRIVATE=false \
 bash script/train/arc_bpo_qwen.sh
 ```
+
+Qwen uses `HuggingFaceH4/ultrafeedback_binarized` with splits `train_prefs`
+and `test_prefs`, initialized from `Qwen/Qwen2.5-7B-Instruct`.
 
 Qwen uses a gentler default ARC-BPO target margin:
 
@@ -149,13 +230,19 @@ output/logs/*.log
 Final checkpoints are saved under:
 
 ```text
-output/train_runs/<run_name>/LATEST
+output/<run_name>/LATEST
 ```
 
 For LoRA runs, the adapter is saved under:
 
 ```text
-output/train_runs/<run_name>/LATEST/adapter
+output/<run_name>/LATEST/adapter
+```
+
+If `HF_REPO_ID` is set, the selected checkpoint folder is uploaded to:
+
+```text
+https://huggingface.co/<HF_REPO_ID>
 ```
 
 The final `LATEST` checkpoint is still saved even when:

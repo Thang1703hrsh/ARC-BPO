@@ -130,6 +130,50 @@ def _merge_short_spans(spans: Sequence[Span], min_tokens_per_chunk: int | None) 
     return merged
 
 
+def retarget_chunk_spans_to_length(chunk_spans: Sequence[Span], n_tokens: int) -> List[Span]:
+    """Retarget chunk spans to a new contiguous token length.
+
+    Chat templates can change tokenizer boundaries at the prompt/response join:
+    tokenizing raw assistant text may produce a slightly different token count
+    than the same assistant content inside the full conversation. ARC-BPO sums
+    chunks over shifted response log-probs, so spans must cover that exact
+    shifted length.
+    """
+    if n_tokens <= 0:
+        return []
+    if not chunk_spans:
+        return [(0, n_tokens)]
+
+    source_total = int(chunk_spans[-1][1])
+    if source_total <= 0:
+        return [(0, n_tokens)]
+    if source_total == n_tokens:
+        return [(int(start), int(end)) for start, end in chunk_spans]
+
+    boundaries = [0]
+    boundaries.extend(
+        round(float(end) * float(n_tokens) / float(source_total))
+        for _, end in chunk_spans
+    )
+    boundaries[0] = 0
+    boundaries[-1] = n_tokens
+
+    clipped = [min(max(int(boundary), 0), n_tokens) for boundary in boundaries]
+    retargeted: List[Span] = []
+    previous = 0
+    for boundary in clipped[1:]:
+        boundary = max(previous, boundary)
+        if boundary > previous:
+            retargeted.append((previous, boundary))
+        previous = boundary
+
+    if not retargeted:
+        return [(0, n_tokens)]
+    retargeted[0] = (0, retargeted[0][1])
+    retargeted[-1] = (retargeted[-1][0], n_tokens)
+    return retargeted
+
+
 def chunk_response_tokens(
     response: Union[str, dict, Sequence[dict]],
     tokenizer,

@@ -9,6 +9,7 @@ from loss.loss_utils import (
     compute_exact_chunk_log_ratios,
     construct_arc_bpo_one_sided_targets,
 )
+from arc_bpo_chunking import retarget_chunk_spans_to_length
 
 
 class ArcBPOTest(unittest.TestCase):
@@ -104,6 +105,15 @@ class ArcBPOTest(unittest.TestCase):
         self.assertTrue(torch.allclose(rho_l, torch.full((2,), 0.5)))
         self.assertTrue(torch.allclose(tau_w, torch.full((4,), 0.25)))
         self.assertTrue(torch.allclose(tau_l, torch.full((2,), -0.5)))
+
+    def test_chunk_spans_retarget_to_shifted_response_logprob_length(self):
+        spans = retarget_chunk_spans_to_length([(0, 7)], n_tokens=6)
+        self.assertEqual(spans, [(0, 6)])
+
+        spans = retarget_chunk_spans_to_length([(0, 4), (4, 7)], n_tokens=6)
+        self.assertEqual(spans[0][0], 0)
+        self.assertEqual(spans[-1][1], 6)
+        self.assertTrue(all(end > start for start, end in spans))
 
     def test_arc_bpo_does_not_use_tbpo_w_value_head_or_token_matching(self):
         loss_source = inspect.getsource(arc_bpo_pair_loss)

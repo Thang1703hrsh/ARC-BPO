@@ -66,6 +66,12 @@ MIN_LOG_INTERVAL_SECS="${MIN_LOG_INTERVAL_SECS:-1.0}"
 USE_LORA="${USE_LORA:-true}"
 USE_BASELINE_HEAD="false"
 
+# Optional HuggingFace upload after a successful train. Leave HF_REPO_ID empty
+# to keep the current local-only behavior.
+HF_REPO_ID="${HF_REPO_ID:-}"
+HF_PRIVATE="${HF_PRIVATE:-true}"
+HF_UPLOAD_ADAPTER_ONLY="${HF_UPLOAD_ADAPTER_ONLY:-true}"
+
 # --- ARC-BPO loss hyperparameters (Qwen2.5-7B-Instruct / UltraFeedback Binarized) ---
 # This backbone is already strongly instruction-tuned, so several methods in
 # experiments.md regress below the base model. We keep delta_star at the gentle
@@ -142,3 +148,56 @@ printf '[RUN]'
 printf ' %q' "${CMD[@]}"
 printf '\n'
 "${CMD[@]}" 2>&1 | tee "${TRAIN_LOG}"
+
+if [[ -n "${HF_REPO_ID}" ]]; then
+  export HF_REPO_ID HF_PRIVATE HF_UPLOAD_ADAPTER_ONLY OUTPUT_DIR USE_LORA
+  python3 - <<'PY'
+import os
+
+from huggingface_hub import HfApi, upload_folder
+
+
+def as_bool(value: str) -> bool:
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+output_dir = os.environ["OUTPUT_DIR"]
+repo_id = os.environ["HF_REPO_ID"]
+hf_private = as_bool(os.environ.get("HF_PRIVATE", "true"))
+use_lora = as_bool(os.environ.get("USE_LORA", "true"))
+upload_adapter_only = as_bool(os.environ.get("HF_UPLOAD_ADAPTER_ONLY", "true"))
+
+latest_dirs = []
+for root, dirs, _ in os.walk(output_dir):
+    if "LATEST" in dirs:
+        latest_path = os.path.join(root, "LATEST")
+        latest_dirs.append((os.path.getmtime(latest_path), latest_path))
+
+if not latest_dirs:
+    raise RuntimeError(f"No LATEST checkpoint found under {output_dir}")
+
+latest_path = max(latest_dirs)[1]
+upload_path = latest_path
+if use_lora and upload_adapter_only:
+    upload_path = os.path.join(latest_path, "adapter")
+    adapter_config = os.path.join(upload_path, "adapter_config.json")
+    adapter_model = os.path.join(upload_path, "adapter_model.safetensors")
+    if not os.path.isfile(adapter_config):
+        raise RuntimeError(f"No LoRA adapter_config.json found at {upload_path}")
+    if not os.path.isfile(adapter_model) or os.path.getsize(adapter_model) <= 1024:
+        raise RuntimeError(
+            f"LoRA adapter_model.safetensors is missing or too small: {adapter_model}"
+        )
+
+print(f"[HF UPLOAD] repo={repo_id}")
+print(f"[HF UPLOAD] folder={upload_path}")
+api = HfApi()
+api.create_repo(repo_id, private=hf_private, exist_ok=True)
+upload_folder(
+    repo_id=repo_id,
+    folder_path=upload_path,
+    commit_message="Upload ARC-BPO Qwen checkpoint",
+)
+print(f"[HF UPLOAD] Done: https://huggingface.co/{repo_id}")
+PY
+fi
