@@ -12,7 +12,7 @@ import torch.multiprocessing as mp
 import transformers
 import wandb
 from omegaconf import DictConfig, OmegaConf
-from peft import LoraConfig, TaskType, get_peft_model
+from peft import LoraConfig, PeftModel, TaskType, get_peft_model
 
 import trainers
 from baseline_head import BaselineHead
@@ -101,8 +101,15 @@ def worker_main(
         baseline_head = None
     disable_dropout(policy)
     if config.model.use_lora:
-        lora_cfg = build_lora_config(config)
-        policy = get_peft_model(policy, lora_cfg)
+        adapter_path = getattr(config.model, "adapter_path", None)
+        if adapter_path:
+            rank0_print(f"loading trainable LoRA adapter from {adapter_path}")
+            policy = PeftModel.from_pretrained(policy, adapter_path, is_trainable=True)
+        else:
+            lora_cfg = build_lora_config(config)
+            policy = get_peft_model(policy, lora_cfg)
+    elif getattr(config.model, "adapter_path", None):
+        raise ValueError("model.adapter_path requires model.use_lora=true")
 
     if rank == 0:
         if config.model.use_lora:

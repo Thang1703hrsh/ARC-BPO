@@ -23,10 +23,10 @@
 % \usepackage{icml2026}
 
 % For preprint, use
-\usepackage[preprint]{icml2026}
+% \usepackage[preprint]{icml2026}
 
 % If accepted, instead use the following line for the camera-ready submission:
-% \usepackage[accepted]{icml2026}
+\usepackage[accepted]{icml2026}
 
 \usepackage{amsmath}
 \usepackage{amssymb}
@@ -150,7 +150,7 @@
     \icmlauthor{Truong Nguyen}{equal,hust}
     \icmlauthor{Tien-Phat Nguyen}{equal,hust}
     \icmlauthor{Linh Ngo Van}{hust}
-    \icmlauthor{Duy Minh Ho Nguyen}{max}
+    \icmlauthor{Duy Minh Ho Nguyen}{unistuttgart,dfki,max}
     \icmlauthor{Khoa D. Doan}{vin}
     \icmlauthor{Trung Le}{monash}
     % \icmlauthor{Firstname7 Lastname7}{comp}
@@ -162,12 +162,14 @@
   \end{icmlauthorlist}
 
   \icmlaffiliation{hust}{Hanoi University of Science and Technology}
+   \icmlaffiliation{unistuttgart}{University of Stuttgart}
+    \icmlaffiliation{dfki}{German Research Center for Artificial Intelligence}
   \icmlaffiliation{max}{Max Planck Research School for Intelligent Systems}
   \icmlaffiliation{vin}{VinUniversity}
   \icmlaffiliation{monash}{Monash University}
 
-  \icmlcorrespondingauthor{Truong Nguyen}{tonytruong23305@gmail.com}
-  % \icmlcorrespondingauthor{Firstname2 Lastname2}{first2.last2@www.uk}
+  \icmlcorrespondingauthor{Linh Ngo Van}{linhnv@soict.hust.edu.vn}
+  \icmlcorrespondingauthor{Trung Le}{trunglm@monash.edu}
 
   % You may provide any keywords that you find helpful for describing your
   % paper; these are used to populate the "keywords" metadata in the PDF but
@@ -185,13 +187,16 @@
 % command is standard text for equal contribution. Remove it (just {}) if you
 % do not need this facility.
 
-% Equal-contribution notice for authors marked with the "equal" symbol.
+% Use ONE of the following lines. DO NOT remove the command.
+% If you have no special notice, KEEP empty braces:
+% \printAffiliationsAndNotice{}  % no special notice (required even if empty)
+% Or, if applicable, use the standard equal contribution text:
 \printAffiliationsAndNotice{\icmlEqualContribution}
 
 \begin{abstract}
 Direct Preference Optimization (DPO) is a widely used RL-free method for aligning language models from pairwise preferences, but it models preferences over full sequences even though generation is driven by per-token decisions. Existing token-level extensions typically decompose a sequence-level Bradley–Terry objective across timesteps, leaving per-prefix (state-wise) optimality implicit. We study how to recover \textbf{token-level} preference optimality using only standard sequence-level pairwise comparisons.
 We introduce \textbf{Token-level Bregman Preference Optimization (TBPO)}, which posits a token-level Bradley--Terry preference model over next-token actions conditioned on the prefix, and derive a Bregman-divergence density-ratio matching objective that generalizes the logistic/DPO loss while preserving the optimal policy induced by the token-level model and maintaining DPO-like simplicity. We introduce two instantiations: TBPO-Q, which explicitly learns a lightweight state baseline, and TBPO-A, which removes the baseline through advantage normalization.
-Across instruction following, helpfulness/harmlessness, and summarization benchmarks, TBPO improves alignment quality and training stability and increases output diversity relative to strong sequence-level and token-level baselines.
+Across instruction following, helpfulness/harmlessness, and summarization benchmarks, TBPO improves alignment quality and training stability and increases output diversity relative to strong sequence-level and token-level baselines. Code is available at \url{https://github.com/dinhtruongng/TBPO}.
 \end{abstract}
 
 \section{Introduction}
@@ -228,17 +233,21 @@ Owing to its simplicity and stability, DPO has become a standard alignment basel
 
 \textbf{DPO variants.}
 Numerous extensions modify DPO through alternative feedback forms, regularization schemes, or reference models \citep{azar2023ipo,ethayarajh2024kto,xu2023cp,hong2024orpo,meng2024simpo, beta-dpo}.
+Recent work also targets more specific failure modes: CDPO applies causal adjustment to reduce confounding in preference data, while logit-space SAM stabilizes DPO by applying sharpness-aware perturbations directly to policy logits~\citep{le2026causal,luo2026logitssam}.
 While improving optimization dynamics or robustness, these methods largely preserve the \emph{sequence-level} preference modeling assumption.
 Recent surveys summarize this rapidly expanding design space \citep{xiao2024survey,liu2024survey}.
 
 \textbf{Token-level methods.}
 To better regulate optimization dynamics in autoregressive models, several token-level variants of DPO have been proposed. TDPO decomposes the sequence-level DPO objective into token-wise terms with per-token KL constraints, while TIS-DPO further incorporates token-level importance sampling to improve training stability~\citep{zeng2024tokenleveldirectpreferenceoptimization,tis-dpo}. However, both methods still assume a \emph{sequence-level} Bradley–Terry preference model, redistributing sequence-level supervision across timesteps rather than explicitly defining token-level preferences. As a result, per-state optimality remains implicit rather than being directly enforced.
+Beyond direct preference optimization, SWIFT assigns teacher-derived token importance weights during self-play fine-tuning~\citep{le2025token}, while CTPD transfers preference-aligned behavior across heterogeneous tokenizers by adapting token-level importance sampling~\citep{truong2026ctpd}. These methods use token-granular signals for weighting or teacher--student transfer, rather than deriving a per-prefix preference-optimal policy from pairwise comparisons.
+More broadly, granularity-sensitive alignment has also been explored in teacher--student transfer: recent LLM distillation work aligns distributions, layer trajectories, or tokenizer-agnostic spans~\citep{hoang2026mcw,chi2026mta,dao2026sra}, while embedding distillation aligns relations and layers in compact representation spaces~\citep{truong2025emo,an2026mol,huy2026mipic}. Related topic-modeling work similarly shows that the choice of semantic representation space, including encoder and LLM-derived representations, affects topic quality and consistency~\citep{nguyen-etal-2025-xtra,DBLP:conf/aaai/PhatMVDN26,xuan2026llmxtmenhancingcrosslingualtopic}. We view this literature as complementary evidence that the unit of representation and alignment matters; TBPO studies this issue in preference learning by moving from sequence-level ratios to prefix- and token-level ratios.
 
 \textbf{Density ratio matching.}
 Another line of work interprets preference optimization through \emph{density ratio matching}.
 Bregman Preference Optimization (BPO) formalizes this view by framing preference learning as likelihood-ratio estimation under Bregman divergences, connecting DPO to classical density-ratio estimators (e.g., logistic regression~\cite{JMLR:v13:gutmann12a}, KLIEP~\cite{NIPS2007_be83ab3e}, LSIF~\cite{lsif}) and showing that DPO is a special case of this framework \citep{kim2025preferenceoptimizationestimatingratio}.
 BPO further introduces a scaled Basu's power divergence to interpolate between KLIEP and LSIF while modulating gradient reweighting during optimization.
-However, like DPO, BPO remains \emph{sequence-level} and does not explicitly model token-level preferences.
+In the safety-constrained setting, BSO derives safety alignment as density-ratio matching and introduces a Bregman family of single-stage safety objectives~\citep{nguyen2026bsosafetyalignmentdensity}.
+Our focus is complementary: unlike these ratio-matching formulations, TBPO explicitly models token-level preferences and targets per-prefix optimality.
 
 \textbf{Our contribution.}
 Motivated by these gaps, we study \textbf{token-level preference modeling}. 
@@ -248,6 +257,7 @@ By defining preferences via a token-level Bradley--Terry model and adopting a ra
 \subsection{Preliminary and Notions}
 When viewing text generation as a Markov decision process \citep{Puterman1994MDP}, we define the state at step $t$ as the prompt together with the response prefix produced so far, i.e., $s_t = [x, y_{<t}]$. The action is the next token to generate, $a_t = y_t$, and the per-token reward is given by $R_t := R(s_t, a_t) = R([x, y_{<t}], y_t)$.
 Using these definitions, for a policy $\pi$ we define the state-action value function $Q^\pi$, the state value function $V^\pi$ and the advantage function $A^\pi$ as:
+
 {\small
 \begin{align*}
 Q^\pi([x, y_{<t}], y_t) &= \mathbb{E}_\pi\left[\sum_{k=0}^\infty \gamma^k R_{t+k} \mid s_t = [x, y_{<t}], a_t = y_t\right], \nonumber \\
@@ -423,6 +433,9 @@ Similarly, we can establish the following equality that links the optimal policy
 See proof in Appendix~\ref{subsec:proof_a_token_ratio}.
 % \subsection{Interpretation and estimation of per state weights}
 
+
+
+
 \subsection{Interpretation and estimation of per state weights}
 In both Proposition~\ref{prop:q_token_ratio} (TBPO-Q) and
 Proposition~\ref{pro:a_token_ratio} (TBPO-A), an extra multiplicative term $w_t$
@@ -457,6 +470,8 @@ which can be interpreted as a \emph{relative policy-improvement cost} between th
 prefixes: it compares how far the optimal policy must deviate from the reference
 at $[x, y^l_{<t}]$ versus $[x, y^w_{<t}]$ under the KL regularizer.
 
+
+
 \subsubsection{Practical estimation.}
 In practice $Z([x, y_{<t}]; \beta)$ and $D_{\mathrm{KL}}$ are either computationally intractable or expensive. We use plug-in estimators that preserve
 the key property that $w_t$ is state-only.
@@ -487,6 +502,67 @@ TBPO-Q’s $w_t$ is a \emph{partition-function / soft-value} ratio and is natura
 by a learned baseline head.
 TBPO-A removes the partition function analytically but introduces a \emph{KL-baseline} term,
 which can be estimated directly from $\pi_{\mathrm{ref}}$ and $\pi_\theta$ using an unbiased estimator.
+
+\newcommand{\mstd}[2]{#1$_{\pm #2}$}
+\newcommand{\best}[1]{\textbf{#1}}
+\newcommand{\second}[1]{\underline{#1}}
+
+\begin{table*}[t]
+\centering
+\small
+\setlength{\tabcolsep}{7pt}
+\renewcommand{\arraystretch}{1.15}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lccccccc}
+\toprule
+\textbf{Method} & \textbf{HellaSwag} & \textbf{ARC} & \textbf{MMLU} & \textbf{TruthfulQA} & \textbf{Winogrande} & \textbf{GSM8K} & \textbf{Average} \\
+\midrule
+
+\rowcolor{gray!15}
+\multicolumn{8}{c}{\textbf{Mistral 7B v0.1}} \\
+\midrule
+SFT
+& \mstd{80.72}{0.39} & \mstd{55.54}{1.45} & \mstd{58.41}{0.39} & \mstd{43.67}{1.46} & \mstd{76.71}{1.18} & \mstd{18.49}{1.07} & 55.59 \\
+DPO
+& \mstd{82.39}{0.38} & \mstd{59.40}{1.43} & \mstd{59.15}{0.38} & \mstd{42.30}{1.49} & \mstd{77.74}{1.16} & {\mstd{34.87}{1.21}} & 59.30 \\
+TDPO
+& \mstd{82.70}{0.38} & \best{\mstd{61.54}{1.41}} & \mstd{57.17}{0.40} & \mstd{43.48}{1.53} & \mstd{76.95}{1.18} & \mstd{28.65}{1.24} & 58.41 \\
+TIS-DPO
+& \best{\mstd{83.10}{0.37}} & \mstd{59.09}{1.42} & \mstd{57.81}{0.39} & \best{\mstd{45.91}{1.56}} & \mstd{77.66}{1.17} & \mstd{34.42}{1.31} & 59.66 \\
+BPO
+& \mstd{81.03}{0.39} & \mstd{57.67}{1.44} & \mstd{59.16}{0.40} & \mstd{41.71}{1.46} & \mstd{77.26}{1.16} & \mstd{32.90}{1.29} & 58.29 \\
+\addlinespace[3pt]
+TBPO-Q (Ours)
+& \mstd{82.72}{0.37} & \second{\mstd{59.74}{1.41}} & \best{\mstd{60.82}{0.39}} & \second{\mstd{44.47}{1.45}} & {\best{\mstd{78.58}{1.11}}} & \best{\mstd{39.34}{1.34}} & \best{60.95} \\
+TBPO-A (Ours)
+& \second{\mstd{82.74}{0.38}} & \mstd{59.47}{1.43} & \second{\mstd{60.54}{0.39}} & \mstd{44.40}{1.46} & \second{\mstd{78.21}{1.21}} & \second{\mstd{39.04}{1.35}} & \second{60.73} \\
+
+\midrule
+\rowcolor{gray!15}
+\multicolumn{8}{c}{\textbf{Llama3 8B}} \\
+\midrule
+SFT
+& \mstd{79.46}{0.40} & \mstd{51.45}{1.46} & \mstd{61.19}{0.39} & \mstd{46.46}{1.45} & \mstd{75.69}{1.21} & \mstd{68.67}{1.37} & 63.82 \\
+DPO
+& {\mstd{81.23}{0.38}} & \mstd{56.05}{1.45} & \mstd{61.70}{0.38} & \mstd{48.47}{1.53} & \mstd{75.84}{1.20} & \mstd{74.20}{1.37} & 66.24 \\
+TDPO
+& \best{\mstd{83.29}{0.37}} & {\mstd{59.04}{1.43}} & {\mstd{61.86}{0.39}} & {\mstd{51.76}{1.55}} & \mstd{76.55}{1.19} & {\mstd{75.10}{1.36}} & {67.91} \\
+TIS-DPO
+& \mstd{81.37}{0.38} & \mstd{58.70}{1.42} & \mstd{60.77}{0.39} & \mstd{49.87}{1.57} & \mstd{75.14}{1.21} & \mstd{75.12}{1.37} & 66.82 \\
+BPO
+& \mstd{81.68}{0.37} & \mstd{54.95}{1.45} & \mstd{61.48}{0.38} & \mstd{47.88}{1.52} & \mstd{75.13}{1.21} & \mstd{73.22}{1.37} & 65.72 \\
+\addlinespace[3pt]
+TBPO-Q (Ours)
+& \mstd{81.90}{0.38} & \second{\mstd{64.07}{1.40}} & \best{\mstd{64.92}{0.38}} & \best{\mstd{53.36}{1.52}} & \second{\mstd{79.08}{1.14}} & \second{\mstd{78.92}{1.12}} & \second{70.38} \\
+TBPO-A (Ours)
+& \second{\mstd{81.97}{0.38}} & \best{\mstd{64.08}{1.40}} & \second{\mstd{64.84}{0.39}} & \second{\mstd{53.29}{1.53}} & \best{\mstd{79.63}{1.12}} & \best{\mstd{79.22}{1.21}} & \best{70.50} \\
+
+\bottomrule
+\end{tabular}%
+}
+\caption{General capabilities on the Open LLM Leaderboard suite for Mistral~7B~v0.1 and Llama~3~8B. Scores are reported by \texttt{lm-eval-harness} (higher is better) with $\pm$ standard error. Best is in \textbf{bold}, second-best is \underline{underlined}.}
+\label{tab:general_style_like_example}
+\end{table*}
 
 \subsection{Token-level Bregman ratio matching}
 \label{sec:bregman}
@@ -565,66 +641,33 @@ Different ratio estimation methods differ only in their choice of function $h$. 
 % \subsection{Gradient analysis}
 
 % Macros (optional but handy)
-\newcommand{\mstd}[2]{#1$_{\pm #2}$}
-\newcommand{\best}[1]{\textbf{#1}}
-\newcommand{\second}[1]{\underline{#1}}
 
-\begin{table*}[t]
-\centering
-\small
-\setlength{\tabcolsep}{7pt}
-\renewcommand{\arraystretch}{1.15}
-\resizebox{\textwidth}{!}{%
-\begin{tabular}{lccccccc}
-\toprule
-\textbf{Method} & \textbf{HellaSwag} & \textbf{ARC} & \textbf{MMLU} & \textbf{TruthfulQA} & \textbf{Winogrande} & \textbf{GSM8K} & \textbf{Average} \\
-\midrule
 
-\rowcolor{gray!15}
-\multicolumn{8}{c}{\textbf{Mistral 7B v0.1}} \\
-\midrule
-SFT
-& \mstd{80.72}{0.39} & \mstd{55.54}{1.45} & \mstd{58.41}{0.39} & \mstd{43.67}{1.46} & \mstd{76.71}{1.18} & \mstd{18.49}{1.07} & 55.59 \\
-DPO
-& \mstd{82.39}{0.38} & \mstd{59.40}{1.43} & \mstd{59.15}{0.38} & \mstd{42.30}{1.49} & \mstd{77.74}{1.16} & {\mstd{34.87}{1.21}} & 59.30 \\
-TDPO
-& \mstd{82.70}{0.38} & \best{\mstd{61.54}{1.41}} & \mstd{57.17}{0.40} & \mstd{43.48}{1.53} & \mstd{76.95}{1.18} & \mstd{28.65}{1.24} & 58.41 \\
-TIS-DPO
-& \best{\mstd{83.10}{0.37}} & \mstd{59.09}{1.42} & \mstd{57.81}{0.39} & \best{\mstd{45.91}{1.56}} & \mstd{77.66}{1.17} & \mstd{34.42}{1.31} & 59.66 \\
-BPO
-& \mstd{81.03}{0.39} & \mstd{57.67}{1.44} & \mstd{59.16}{0.40} & \mstd{41.71}{1.46} & \mstd{77.26}{1.16} & \mstd{32.90}{1.29} & 58.29 \\
-\addlinespace[3pt]
-TBPO-Q (Ours)
-& \mstd{82.72}{0.37} & \second{\mstd{59.74}{1.41}} & \best{\mstd{60.82}{0.39}} & \second{\mstd{44.47}{1.45}} & {\best{\mstd{78.58}{1.11}}} & \best{\mstd{39.34}{1.34}} & \best{60.95} \\
-TBPO-A (Ours)
-& \second{\mstd{82.74}{0.38}} & \mstd{59.47}{1.43} & \second{\mstd{60.54}{0.39}} & \mstd{44.40}{1.46} & \second{\mstd{78.21}{1.21}} & \second{\mstd{39.04}{1.35}} & \second{60.73} \\
 
-\midrule
-\rowcolor{gray!15}
-\multicolumn{8}{c}{\textbf{Llama3 8B}} \\
-\midrule
-SFT
-& \mstd{79.46}{0.40} & \mstd{51.45}{1.46} & \mstd{61.19}{0.39} & \mstd{46.46}{1.45} & \mstd{75.69}{1.21} & \mstd{68.67}{1.37} & 63.82 \\
-DPO
-& {\mstd{81.23}{0.38}} & \mstd{56.05}{1.45} & \mstd{61.70}{0.38} & \mstd{48.47}{1.53} & \mstd{75.84}{1.20} & \mstd{74.20}{1.37} & 66.24 \\
-TDPO
-& \best{\mstd{83.29}{0.37}} & {\mstd{59.04}{1.43}} & {\mstd{61.86}{0.39}} & {\mstd{51.76}{1.55}} & \mstd{76.55}{1.19} & {\mstd{75.10}{1.36}} & {67.91} \\
-TIS-DPO
-& \mstd{81.37}{0.38} & \mstd{58.70}{1.42} & \mstd{60.77}{0.39} & \mstd{49.87}{1.57} & \mstd{75.14}{1.21} & \mstd{75.12}{1.37} & 66.82 \\
-BPO
-& \mstd{81.68}{0.37} & \mstd{54.95}{1.45} & \mstd{61.48}{0.38} & \mstd{47.88}{1.52} & \mstd{75.13}{1.21} & \mstd{73.22}{1.37} & 65.72 \\
-\addlinespace[3pt]
-TBPO-Q (Ours)
-& \mstd{81.90}{0.38} & \second{\mstd{64.07}{1.40}} & \best{\mstd{64.92}{0.38}} & \best{\mstd{53.36}{1.52}} & \second{\mstd{79.08}{1.14}} & \second{\mstd{78.92}{1.12}} & \second{70.38} \\
-TBPO-A (Ours)
-& \second{\mstd{81.97}{0.38}} & \best{\mstd{64.08}{1.40}} & \second{\mstd{64.84}{0.39}} & \second{\mstd{53.29}{1.53}} & \best{\mstd{79.63}{1.12}} & \best{\mstd{79.22}{1.21}} & \best{70.50} \\
+\subsection{Overall principle of our approach}
+The standard Bradley--Terry (BT) model encourages the entire sequence $y^w \succ y^l$.
+In contrast, we propose a token-level BT model that encourages progressively better substrings $y^w_{\le t} \succ y^l_{\le t}$ as $t$ varies according to the recursive definition in Eq.~\eqref{eq:recursive}.
+Our goal is not to treat generation only as a whole-sequence preference problem, but to encourage the model to form good partial reasoning early and maintain it throughout generation.
+In this way, stronger intermediate prefixes can support further high-quality continuation, which helps address credit assignment in a more fine-grained way and can lead to more concise, shorter, and more precise responses.
 
-\bottomrule
-\end{tabular}%
-}
-\caption{General capabilities on the Open LLM Leaderboard suite for Mistral~7B~v0.1 and Llama~3~8B. Scores are reported by \texttt{lm-eval-harness} (higher is better) with $\pm$ standard error. Best is in \textbf{bold}, second-best is \underline{underlined}.}
-\label{tab:general_style_like_example}
-\end{table*}
+From this perspective, sequence-level preference labels are not merely copied to every timestep as hard tokenwise win/loss annotations.
+Instead, they induce a sequence of prefix-conditioned local comparisons, which is exactly the structure captured by our token-level BT formulation.
+This is the key difference from prior approaches whose underlying preference model remains sequence-level and mainly redistributes the same global signal across positions.
+Our formulation instead makes the preference modeling itself token-level, so that better local decisions are encouraged progressively during autoregressive generation.
+
+We also note that a naive decomposition could overemphasize locally plausible but globally suboptimal decisions.
+TBPO is designed to mitigate exactly this issue.
+First, supervision is defined over progressively extended prefixes, not isolated tokens, which preserves sequential dependency.
+Second, the state-dependent correction weight reduces mismatch when comparing next-token decisions made under different prefix contexts, preventing the model from attributing the entire sequence-level preference gap to a single step.
+In this sense, TBPO should be viewed as a principled subsequence-level surrogate derived from sequence-level preferences, together with an explicit mechanism to reduce the local--global mismatch, rather than as an assumption that improving local token decisions is always sufficient by itself.
+
+\begin{figure*}[t] % full-width float in two-column mode
+  \centering
+  \includegraphics[width=\textwidth,page=1]{TBPO_Combined_MTBench_Adjusted.pdf}
+  \caption{MT-Bench pairwise win/tie/lose rates for TBPO-Q (top) and TBPO-A (bottom) against prior preference-optimization baselines, evaluated by two LLM judges. TBPO achieves higher win rates with low loss rates across both judges, and the advantage persists even against the strongest baseline.}
+  \label{fig:mtbench}
+\end{figure*}
+
 \section{Experiments}
 \label{sec:experiments}
 
@@ -688,16 +731,12 @@ We compare TBPO-Q and TBPO-A against various prior preference-optimization basel
 \paragraph{LLM judges.}
 Some benchmarks, including Anthropic HH-RLHF, TL;DR, and MT-Bench, require pairwise evaluation with an LLM-as-a-judge framework. Prior work has analyzed the reliability and biases of LLM judges~\cite{zhang2025compassjudger2generalistjudgemodel, han2025judgesverdictcomprehensiveanalysis}; following these findings, we adopt task-specific judge pairs. For Anthropic HH-RLHF and TL;DR, we use \href{https://huggingface.co/meta-llama/Meta-Llama-3-70B-Instruct}{Llama 3 70B Instruct} and \href{https://huggingface.co/deepseek-ai/DeepSeek-V3}{DeepSeek-V3}, while for MT-Bench we use \href{https://huggingface.co/meta-llama/Meta-Llama-3-70B-Instruct}{Llama 3 70B Instruct} and \href{https://huggingface.co/mistralai/Mixtral-8x22B-Instruct-v0.1}{Mixtral-8x22B Instruct v0.1}. Additional details are provided in Appendix~\ref{app:experiments}.
 
-
-
-
 \begin{figure*}[t] % full-width float in two-column mode
   \centering
-  \includegraphics[width=\textwidth,page=1]{TBPO_Combined_MTBench_Adjusted.pdf}
-  \caption{MT-Bench pairwise win/tie/lose rates for TBPO-Q (top) and TBPO-A (bottom) against prior preference-optimization baselines, evaluated by two LLM judges. TBPO achieves higher win rates with low loss rates across both judges, and the advantage persists even against the strongest baseline.}
-  \label{fig:mtbench}
+  \includegraphics[width=\textwidth,page=1]{hh.pdf}
+  \caption{LC win rate vs.\ average response length against the dataset-preferred completion for Llama~3~8B, evaluated by two LLM judges (Llama~3~70B, DeepSeek-V3); error bars are $\pm$1 s.e.\ over 200 prompts. TBPO leads with shorter outputs, indicating gains beyond verbosity and consistent across judges.}
+  \label{fig:hh}
 \end{figure*}
-
 
 \subsection{General Capabilities}
 A common concern in preference optimization is over-specialization to preference data, which may harm general capabilities. 
@@ -709,7 +748,9 @@ On \textbf{Mistral 7B v0.1}, sequence-level preference optimization already impr
 
 On \textbf{Llama 3 8B}, \textbf{TBPO-A is best on average} (\textbf{70.50}) with TBPO-Q close behind (70.38), improving substantially over TDPO (67.91). Improvements concentrate on ARC (+5 vs.\ TDPO; 64.08 vs.\ 59.04), GSM8K (+4; 79.22 vs.\ 75.10), and Winogrande (+3; 79.63 vs.\ 76.55). TBPO-A leads on ARC/GSM8K/Winogrande, while TBPO-Q attains the best MMLU (64.92) and TruthfulQA (53.36), showing robustness to the preference-model formulation.
 
-Overall, TBPO delivers the strongest mean performance across two model families, with large gains on reasoning-centric benchmarks and no evidence of systematic trade-offs on broader language understanding.
+The similar performance of TBPO-Q and TBPO-A is expected from the theory: the two variants differ mainly in how they approximate the same state-only correction term $w_t$, rather than in the core token-level preference objective. TBPO-Q represents $w_t$ as a partition-function or soft-value ratio and estimates it with a learned baseline head, whereas TBPO-A analytically removes the partition function and replaces it with a KL-based state baseline estimated directly from $\pi_{\mathrm{ref}}$ and $\pi_\theta$. Since both estimators target the same prefix-level correction, their optimization targets remain nearly identical when the estimators are stable. The near ties in Table~\ref{tab:general_style_like_example} therefore suggest that the main gain comes from the shared token-level ratio-matching formulation, while the particular estimator used for $w_t$ is a secondary implementation choice.
+
+Overall, TBPO delivers the strongest mean performance across two model families, with large gains on reasoning-centric benchmarks and no evidence of systematic trade-offs on broader language understanding. To better understand these reasoning gains, we provide qualitative case studies on reasoning questions in Appendix~\ref{app:reasoning_case_study}.
 
 
 % A common concern with preference optimization is that it can over-specialize a model to the preference dataset and inadvertently degrade general-purpose capabilities. To assess general model performance, we adopt the protocol of the \textbf{HuggingFace Open LLM Leaderboard}~\cite{huggingface_open_llm_leaderboard_v1}, implemented via the Language Model Evaluation Harness~\cite{eleutherai_lm_eval_harness_concept}. This framework provides a robust assessment across six established benchmarks targeting key LLM capabilities:
@@ -728,15 +769,11 @@ Overall, TBPO delivers the strongest mean performance across two model families,
 % Overall, Table~\ref{tab:general_style_like_example} shows that TBPO delivers the strongest mean performance across two model families, with particularly large improvements on reasoning-centric benchmarks and no evidence of systematic trade-offs on broader language understanding tasks.
 
 \subsection{Generation Quality}
+
 \paragraph{MT-Bench.} To evaluate generation quality, we run MT-Bench~\cite{zheng2023judging} under the standard LLM-as-a-judge protocol and report pairwise win/tie/lose rates against prior preference-optimization baselines. Figure~\ref{fig:mtbench} shows that TBPO-Q and TBPO-A consistently improve win rates with low loss rates; against the strongest baseline (TDPO), many comparisons are ties, but TBPO wins the majority of decisive (non-tie) cases. This suggesting the advantage is not driven by a small number of outliers. The overall ordering and effect sizes are consistent across both judges, supporting the conclusion that TBPO improves generation quality in a robust, judge-agnostic manner, and that TBPO-Q and TBPO-A are comparably strong.
 
 \paragraph{Harmless and Helpfulness.}
-\begin{figure*}[t] % full-width float in two-column mode
-  \centering
-  \includegraphics[width=\textwidth,page=1]{hh.pdf}
-  \caption{LC win rate vs.\ average response length against the dataset-preferred completion for Llama~3~8B, evaluated by two LLM judges (Llama~3~70B, DeepSeek-V3); error bars are $\pm$1 s.e.\ over 200 prompts. TBPO leads with shorter outputs, indicating gains beyond verbosity and consistent across judges.}
-  \label{fig:hh}
-\end{figure*}
+
 
 % \begin{figure}[t] % single-column float in two-column mode
 %   \centering
@@ -753,7 +790,7 @@ Across both judges, TBPO variants achieve the strongest preference alignment whi
 \paragraph{Generation Diversity.}
 \begin{figure}[t]
     \centering
-    \includegraphics[width=\linewidth,page=1]{generation_diversity.pdf}
+    \includegraphics[width=\linewidth,page=1]{generation_diversity.pdf} 
     \caption{Generation diversity trade-offs: Distinct-1 vs. predictive entropy (higher is better), colored by self-BLEU (lower is better). TBPO achieves the best three-way trade-off across all three metrics.}
     \label{fig:diversity}
 \end{figure}
@@ -767,7 +804,7 @@ Two patterns emerge. (1) DPO/TDPO/BPO have moderate Distinct-1 but lower predict
 
 % Second, TBPO shifts the Pareto frontier toward the desirable upper-right region while keeping self-BLEU favorable, yielding the best overall three-metric trade-off. Relative to DPO-style methods, TBPO substantially increases predictive entropy and improves Distinct-1 without the typical loss of across-sample diversity. Compared to SFT, which has high predictive entropy and low self-BLEU but lower Distinct-1, TBPO preserves non-collapsed sampling behavior while also increasing lexical variety. Overall, these results suggest TBPO better balances preference satisfaction with diversity preservation, producing outputs that are both less redundant across samples and less over-confident at the token level.
 
-Additional experiments on generalization and out-of-domain tasks for TBPO are reported in Appendix~\ref{app:additional}.
+Additional experiments on out-of-domain tasks, ability to handle noisy data, ablation on per-state weight estimation and judge agreement analysis for TBPO are reported in Appendix~\ref{app:additional}.
 % \subsection{Summarization task}
 % \begin{figure*}[t] % full-width float in two-column mode
 %   \centering
@@ -887,6 +924,10 @@ We presented a principled token-level preference optimization framework aligned 
 %     \item Application to other domains where token-level granularity matters (e.g., translation, code generation).
 %     \item Investigation of how Token Alignment scales to larger models (70B+) and longer sequences.
 % \end{itemize}
+
+\section*{Acknowledgements}
+Trung Le was supported by the Air Force Office of Scientific Research under award number FA9550-23-S-0001 and the ARC Discovery Project grant DP250100262. Linh Ngo Van is funded by Vietnam National Foundation for Science and Technology
+Development (NAFOSTED) under grant number 102.05-2025.16.
 
 \section*{Impact Statement}
 This work focuses on the development of a principled learning algorithm with theoretical guarantees. The primary impact of this research is methodological, contributing to the design of more reliable and well-understood machine learning systems. While the proposed method is evaluated on standard benchmarks, it is not tied to a specific high-risk application domain. We do not foresee any immediate negative societal consequences arising directly from this work; however, as with most advances in machine learning, downstream applications should be deployed responsibly and with appropriate consideration of ethical and societal implications.
@@ -1473,8 +1514,18 @@ D_{h}\left(R_{\text{data}},R_{\theta}\right)
 
 \section{Additional Experimental Result}
 \label{app:additional}
-\subsection{Out-of-domain Result on Summarization Task}
 
+
+
+
+
+\subsection{Out-of-domain Result on Summarization Task}
+\begin{figure*}[t] % full-width float in two-column mode
+  \centering
+  \includegraphics[width=\textwidth,page=1]{tldr_fixed_axis.pdf}
+  \caption{LC win rate vs.\ average response length on TLDR for Llama~3~8B, judged by Llama~3~70B and DeepSeek-V3. TBPO achieves highest win rate with shorter outputs, suggesting strong OOD generalization despite training only on UltraFeedback dataset.}
+  \label{fig:tldr}
+\end{figure*}
 
 To stress-test out-of-domain (OOD) transfer, we evaluate on 200 held-out samples from the test split of \href{https://huggingface.co/datasets/trl-lib/tldr}{TLDR}. This is a stringent OOD setting: TLDR is a summarization benchmark with long input documents and short, reference-style outputs, and we do not use any TLDR data during training (TBPO is trained only on UltraFeedback).
 
@@ -1482,16 +1533,234 @@ As with Anthropic HH, we quantify OOD generalization by measuring length-control
 
 The plot also highlights a clear mismatch between length and preference in this OOD task: SFT produces the longest responses yet attains low win rates under both judges, while DPO/BPO/TISDPO/TDPO generally trade longer generations for incremental gains and still fall short of TBPO. Since TLDR implicitly rewards concise, faithful summarization, TBPO’s ability to win while staying short strengthens the interpretation that it adapts to task-appropriate brevity rather than relying on generic verbosity. The consistent ordering across two independent judges further supports that the observed advantage reflects genuine OOD generalization.
 
+\subsection{Training with Noisy Data}
+
+We additionally evaluate TBPO under noisy preference labels by randomly swapping the chosen and rejected responses in 10\% of the training pairs. Table~\ref{tab:noisy_training_llama3} reports results on the Llama~3~8B backbone.
+
+\begin{table*}[t]
+\centering
+\small
+\setlength{\tabcolsep}{7pt}
+\renewcommand{\arraystretch}{1.15}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lccccccc}
+\toprule
+\textbf{Method} & \textbf{HellaSwag} & \textbf{ARC} & \textbf{MMLU} & \textbf{TruthfulQA} & \textbf{Winogrande} & \textbf{GSM8K} & \textbf{Average} \\
+\midrule
+SFT
+& 79.46 & 51.45 & 61.19 & 46.46 & 75.69 & 68.67 & 63.82 \\
+DPO
+& 81.23 & 56.05 & 61.70 & 48.47 & 75.84 & 74.20 & 66.24 \\
+TDPO
+& \best{83.29} & 59.04 & 61.86 & 51.76 & 76.55 & 75.10 & 67.91 \\
+TIS-DPO
+& 81.37 & 58.70 & 60.77 & 49.87 & 75.14 & 75.12 & 66.82 \\
+BPO
+& 81.68 & 54.95 & 61.48 & 47.88 & 75.13 & 73.22 & 65.72 \\
+\addlinespace[3pt]
+TBPO-Q noisy
+& 81.11 & 60.24 & 60.25 & 50.38 & 78.24 & 74.60 & 67.47 \\
+TBPO-Q (Ours)
+& 81.90 & \best{64.07} & \best{64.92} & \best{53.36} & 79.08 & 78.92 & 70.38 \\
+TBPO-A noisy
+& 80.92 & 61.34 & 60.38 & 51.08 & 77.74 & 74.35 & 67.63 \\
+TBPO-A (Ours)
+& 81.97 & \best{64.08} & \second{64.84} & \second{53.29} & \best{79.63} & \best{79.22} & \best{70.50} \\
+\bottomrule
+\end{tabular}%
+}
+\caption{General capability results on the Llama~3~8B backbone when TBPO is trained with 10\% noisy preference data, created by swapping the chosen and rejected responses in randomly selected training pairs.}
+\label{tab:noisy_training_llama3}
+\end{table*}
+
+Performance drops under noisy labels, but TBPO remains competitive with strong token-level baselines and close to the clean TBPO variants. This suggests that TBPO is not brittle to moderate label noise. Broader analyses, such as extreme response lengths and additional distribution shifts, would further clarify the method's practical limits.
+
+\subsection{Constant Weight Training}
+
+We further conduct an ablation by fixing the state-dependent correction to $w_t=1$ throughout training. Detailed results on the Llama~3~8B backbone are shown in Table~\ref{tab:constant_weight_llama3}.
+
+\begin{table*}[t]
+\centering
+\small
+\setlength{\tabcolsep}{7pt}
+\renewcommand{\arraystretch}{1.15}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{lccccccc}
+\toprule
+\textbf{Method} & \textbf{HellaSwag} & \textbf{ARC} & \textbf{MMLU} & \textbf{TruthfulQA} & \textbf{Winogrande} & \textbf{GSM8K} & \textbf{Average} \\
+\midrule
+SFT
+& 79.46 & 51.45 & 61.19 & 46.46 & 75.69 & 68.67 & 63.82 \\
+DPO
+& 81.23 & 56.05 & 61.70 & 48.47 & 75.84 & 74.20 & 66.24 \\
+TDPO
+& \best{83.29} & 59.04 & 61.86 & 51.76 & 76.55 & 75.10 & 67.91 \\
+TIS-DPO
+& 81.37 & 58.70 & 60.77 & 49.87 & 75.14 & 75.12 & 66.82 \\
+BPO
+& 81.68 & 54.95 & 61.48 & 47.88 & 75.13 & 73.22 & 65.72 \\
+\addlinespace[3pt]
+TBPO (fixed $w_t=1$)
+& 80.93 & 61.35 & 62.11 & 52.38 & 77.24 & 76.23 & 68.37 \\
+\addlinespace[3pt]
+TBPO-Q (Ours)
+& 81.90 & \second{64.07} & \best{64.92} & \best{53.36} & \second{79.08} & \second{78.92} & \second{70.38} \\
+TBPO-A (Ours)
+& \second{81.97} & \best{64.08} & \second{64.84} & \second{53.29} & \best{79.63} & \best{79.22} & \best{70.50} \\
+\bottomrule
+\end{tabular}%
+}
+\caption{General capability results on the Llama~3~8B backbone with the state-dependent correction fixed to $w_t=1$.}
+\label{tab:constant_weight_llama3}
+\end{table*}
+
+Relative to both TBPO-Q and TBPO-A, the fixed-$w_t$ variant shows a clear drop, confirming that the per-state correction contributes materially to the final gain. At the same time, it still outperforms all non-TBPO baselines, including TDPO, indicating that the improvement comes from both the token-level ratio-matching formulation and the state-dependent correction.
+
+\subsection{Judge Agreement Analysis}
+\label{app:judge-agreement}
+
+To assess judge robustness, we measured agreement across both LLM-as-a-judge setups used in the paper: DeepSeek-V3 vs.\ Llama~3~70B on HH-RLHF, and Llama~3~70B vs.\ Mistral-Large on MT-Bench.
+
+Full results are available in Tables~\ref{tab:judge_agreement_hh} and~\ref{tab:judge_agreement_mt}.
+
+On HH-RLHF, the two judges show strong agreement (90\% raw agreement; PABAK = 0.8 over 1{,}180 paired judgments). The lower Cohen's $\kappa$ is expected in this highly skewed setting, and aggregate conclusions remain consistent across judges (Pearson $r = 0.81$, Spearman $\rho = 0.71$). On MT-Bench, example-level agreement is moderate (70\% raw agreement, $\kappa = 0.49$, PABAK = 0.41), but aggregate conclusions are nearly identical across judges (Pearson $r = 0.99$, Spearman $\rho = 1.0$). Overall, the main conclusions are stable across judges, suggesting that TBPO's gains are not driven by any single judge choice.
+
+\begin{table*}[t]
+\centering
+\small
+\setlength{\tabcolsep}{8pt}
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{lccccc}
+\toprule
+\textbf{Method} & \textbf{N} & \textbf{Agree} & \textbf{Agree\%} & \textbf{Kappa} & \textbf{PABAK} \\
+\midrule
+TBPO-A & 197 & 191 & 97.0 & 0.4861 & 0.9391 \\
+TBPO-Q & 198 & 187 & 94.4 & 0.3240 & 0.8889 \\
+DPO & 196 & 165 & 84.2 & 0.2780 & 0.6837 \\
+SFT & 199 & 174 & 87.4 & 0.3516 & 0.7487 \\
+TDPO & 195 & 173 & 88.7 & 0.3270 & 0.7744 \\
+TISDPO & 195 & 172 & 88.2 & 0.3158 & 0.7641 \\
+\midrule
+\textbf{Overall} & \textbf{1180} & \textbf{1062} & \textbf{90.0} & \textbf{0.3471} & \textbf{0.8000} \\
+\bottomrule
+\end{tabular}
+
+\vspace{0.8em}
+
+\begin{tabular}{lcc}
+\toprule
+\textbf{Method} & \textbf{DeepSeek-V3 WR\%} & \textbf{Llama~3~70B WR\%} \\
+\midrule
+TBPO-A & 96.00 & 97.97 \\
+TBPO-Q & 95.50 & 95.45 \\
+DPO & 87.50 & 86.22 \\
+SFT & 86.50 & 91.46 \\
+TDPO & 90.50 & 90.26 \\
+TISDPO & 88.00 & 92.31 \\
+\bottomrule
+\end{tabular}
+\caption{HH-RLHF judge agreement results comparing each model response against the reference response. Pearson $r = 0.8056$ ($p = 5.30\mathrm{e}{-02}$), Spearman $\rho = 0.7143$ ($p = 1.11\mathrm{e}{-01}$).}
+\label{tab:judge_agreement_hh}
+\end{table*}
+
+\begin{table*}[t]
+\centering
+\small
+\setlength{\tabcolsep}{8pt}
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{lccccc}
+\toprule
+\textbf{TBPO-Q vs.} & \textbf{N} & \textbf{Agree} & \textbf{Agree\%} & \textbf{Kappa} & \textbf{PABAK} \\
+\midrule
+DPO & 160 & 117 & 73.1 & 0.5058 & 0.4625 \\
+TDPO & 160 & 107 & 66.9 & 0.4542 & 0.3375 \\
+TISDPO & 160 & 115 & 71.9 & 0.5143 & 0.4375 \\
+\midrule
+\textbf{Overall} & \textbf{480} & \textbf{339} & \textbf{70.6} & \textbf{0.4914} & \textbf{0.4125} \\
+\bottomrule
+\end{tabular}
+
+\vspace{0.8em}
+
+\begin{tabular}{lcc}
+\toprule
+\textbf{TBPO-Q vs.} & \textbf{Llama~3~70B WR\%} & \textbf{Mistral-Large WR\%} \\
+\midrule
+DPO & 73.44 & 76.88 \\
+TDPO & 66.25 & 67.81 \\
+TISDPO & 70.00 & 71.88 \\
+\bottomrule
+\end{tabular}
+\caption{MT-Bench judge agreement results comparing the TBPO-Q response with the baseline response. Pearson $r = 0.9964$ ($p = 5.40\mathrm{e}{-02}$), Spearman $\rho = 1.0000$ ($p = 0.00\mathrm{e}{+00}$).}
+\label{tab:judge_agreement_mt}
+\end{table*}
+
+\section{Reasoning Questions Case Study}
+\label{app:reasoning_case_study}
+
+We believe the larger gains on reasoning-centric benchmarks are expected because these tasks are especially sensitive to early prefix-conditioned decisions. Once a model commits to an incorrect intermediate step, the rest of the reasoning often follows the wrong trajectory. TBPO is well matched to this setting because it performs token-level ratio matching rather than optimizing only at the sequence level. As a result, it provides more direct learning signal on the local reasoning decisions that determine whether a solution stays on track. In practice, this tends to help the model commit to the correct setup earlier, which is particularly important in multi-step reasoning.
+
+We provide two qualitative examples in Tables~\ref{tab:reasoning_case_desktop} and~\ref{tab:reasoning_case_limbs}. Example~1 shows our model identifying the decisive setup early, while the baseline misses the key relation and propagates the error through the rest of the solution. Example~2 shows a different but related advantage: even when both models reach the correct final answer, our model does so through a shorter and more direct reasoning path, whereas the baseline relies on a longer enumerative chain.
+
+Together, these examples illustrate why the gains are larger on reasoning-centric benchmarks: such tasks are especially sensitive to early intermediate decisions, and TBPO is designed to train those decisions more directly.
+
+\begin{table*}[t]
+\centering
+\small
+\setlength{\tabcolsep}{6pt}
+\renewcommand{\arraystretch}{1.2}
+\begin{tabular}{p{0.13\textwidth}p{0.80\textwidth}}
+\toprule
+\textbf{Item} & \textbf{Content} \\
+\midrule
+\textbf{Question} &
+At a certain grade level, three-fourths of students have a desktop computer at home. If 20 students do not have desktop computers, how many students are there at that grade level? \\
+\midrule
+\textbf{Our model} &
+Let $x$ be the total number of students at that grade level. Three-fourths of the students have desktop computers, so $(3/4)x$ students have desktop computers. The number of students without desktop computers is 20, so $(1/4)x = 20$. To find the total number of students, we can multiply both sides of the equation by 4: $x = 20 \times 4 = 80$.
+
+\textbf{80} \\
+\midrule
+\textbf{Baseline} &
+If 20 students do not have desktop computers, then $75 - 20 = 55$ students have desktop computers at home. Since $3/4$ of the students have desktop computers, then $3/4 \times 55 = 41.25$ students have desktop computers at home. Since 55 students have desktop computers, then $55 - 41.25 = 13.75$ students do not have desktop computers. Since 13.75 students do not have desktop computers, then $13.75 \times 4/3 = 18.33$ students do not have desktop computers. There are 18.33 students who do not have desktop computers, so there are $18.33 \times 4/3 = 24.44$ students at that grade level.
+
+\textbf{24} \\
+\bottomrule
+\end{tabular}
+\caption{A reasoning case where our model identifies the decisive setup immediately, while the baseline commits to an incorrect setup and propagates the error through the rest of the solution.}
+\label{tab:reasoning_case_desktop}
+\end{table*}
+
+\begin{table*}[t]
+\centering
+\small
+\setlength{\tabcolsep}{6pt}
+\renewcommand{\arraystretch}{1.2}
+\begin{tabular}{p{0.13\textwidth}p{0.80\textwidth}}
+\toprule
+\textbf{Item} & \textbf{Content} \\
+\midrule
+\textbf{Question} &
+Helena is a mad scientist testing her latest creation, the Lots-of-Limbs Serum. The serum will make the drinker grow an extra arm every three days and an extra leg every five days. After fifteen days, how many new limbs will Helena's serum cause a person to grow if they drink it? \\
+\midrule
+\textbf{Our model} &
+At one new arm every 3 days, after 15 days, a person who drank Helena's serum would grow $15/3 = 5$ extra arms. At one new leg every 5 days, after 15 days, the person would grow $15/5 = 3$ extra legs. In all, someone who drank Helena's serum would grow $5 + 3 = 8$ new limbs after 15 days.
+
+\textbf{8} \\
+\midrule
+\textbf{Baseline} &
+After three days, the drinker will grow one extra arm. After six days, the drinker will grow two extra arms. After nine days, the drinker will grow three extra arms. After twelve days, the drinker will grow four extra arms. After fifteen days, the drinker will grow five extra arms. After five days, the drinker will grow one extra leg. After ten days, the drinker will grow two extra legs. After fifteen days, the drinker will grow three extra legs. After fifteen days, the drinker will grow five extra arms and three extra legs, for a total of 8 new limbs.
+
+\textbf{8} \\
+\bottomrule
+\end{tabular}
+\caption{A reasoning case where both models reach the correct final answer, but our model does so through a shorter and more direct reasoning path.}
+\label{tab:reasoning_case_limbs}
+\end{table*}
+
+
 \section{Detailed Experimental Setup}
 \label{app:experiments}
-
-
-\begin{figure*}[t] % full-width float in two-column mode
-  \centering
-  \includegraphics[width=\textwidth,page=1]{tldr_fixed_axis.pdf}
-  \caption{LC win rate vs.\ average response length on TLDR for Llama~3~8B, judged by Llama~3~70B and DeepSeek-V3. TBPO achieves highest win rate with shorter outputs, suggesting strong OOD generalization despite training only on UltraFeedback dataset.}
-  \label{fig:tldr}
-\end{figure*}
 
 \subsection{Benchmark and Metrics Details}
 
@@ -1599,6 +1868,35 @@ We train TBPO on 4 H100 GPUs with batch size 32 and max response length 2048, us
 RMSProp with a cosine learning-rate schedule (warmup ratio 0.05), lr $5\times10^{-7}$,
 for 1 epoch. Unless stated otherwise, we use $\beta=0.1$ and Bregman parameters
 $\lambda=0$ and $s=4$.
+
+\subsection{Time Complexity}
+\label{app:time_complexity}
+We report wall-clock runtimes under the same 4$\times$H100 setup and batch
+size used in our experiments. DPO finishes in 1h52m, while TDPO, TBPO-Q, and
+TBPO-A take 2h29m, 2h52m, and 2h38m, respectively. TIS-DPO takes 5h40m because
+it requires training auxiliary positive/negative DPO models before the main
+preference-learning stage. These results show that TBPO is more expensive than
+sequence-level DPO, as expected for a token-level objective, but its overhead is
+modest relative to other token-level baselines: TBPO-A is close to TDPO, TBPO-Q
+is only moderately slower, and both are substantially more efficient than
+TIS-DPO.
+
+\begin{table}[h!]
+\centering
+\begin{tabular}{lcc}
+\toprule
+\textbf{Method} & \textbf{Runtime} & \textbf{Relative to DPO} \\
+\midrule
+DPO & 1h52m & 1.00$\times$ \\
+TDPO & 2h29m & 1.33$\times$ \\
+TIS-DPO & 5h40m & 3.04$\times$ \\
+TBPO-Q & 2h52m & 1.54$\times$ \\
+TBPO-A & 2h38m & 1.41$\times$ \\
+\bottomrule
+\end{tabular}
+\caption{Wall-clock training runtime under the same 4$\times$H100 setup and batch size.}
+\label{tab:runtime}
+\end{table}
 
 % We report wall-clock training times measured on a single A100 GPU:
 % \begin{table}[h!]

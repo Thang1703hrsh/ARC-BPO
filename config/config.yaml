@@ -75,6 +75,16 @@ n_epochs: 1
 # the number of examples to train for; if null, must specify n_epochs
 n_examples: null
 
+# number of valid tokenized train examples to skip before yielding batches.
+# This is used for resumable chunked training, e.g. stage 1 skips the first
+# 20,000 examples and trains on the next 20,000.
+skip_examples: 0
+
+# preference-label noise for robustness experiments. When > 0, the training
+# iterator randomly swaps chosen/rejected pairs with this probability.
+label_noise_rate: 0.0
+label_noise_seed: 0
+
 # the number of examples to evaluate on (and sample from, if sample_during_eval is true)
 n_eval_examples: 64
 
@@ -97,6 +107,10 @@ activation_checkpointing: false
 
 # evaluate and save model every eval_every steps
 save_checkpoint: true
+
+# Save checkpoints independently of evaluation after this many train examples.
+# Set to 0 to use the trainer default (batch_size * 100).
+save_every_examples: 0
 
 # prevent wandb from logging more than once per minimum_log_interval_secs
 minimum_log_interval_secs: 1.0

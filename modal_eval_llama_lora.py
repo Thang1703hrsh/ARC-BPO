@@ -2,7 +2,7 @@
 Quick Open LLM Leaderboard v1 evaluation for a LLaMA3 ARC-BPO LoRA adapter.
 
 Default model:
-  ducthang1703/llama3-arc-bpo-lora-1k
+  ducthang1703/llama3-arc-bpo-lora-smoke-64
 
 Run the default quick eval tasks:
   modal run --detach modal_eval_llama_lora.py::main
@@ -18,7 +18,7 @@ import modal
 
 
 APP_NAME = "tbpo-llama3-lora-eval"
-DEFAULT_MODEL = "ducthang1703/llama3-arc-bpo-lora-1k"
+DEFAULT_MODEL = "ducthang1703/llama3-arc-bpo-lora-smoke-64"
 DEFAULT_MODEL_LABEL = "llama3-arc-bpo-lora-1k"
 RUN_VERSION = "llama3-lora-hf-a100-merge-vllm-pre-v1-oomsafe-v2"
 

@@ -1,7 +1,7 @@
 # Minimal training dependencies matching modal_train_llama.py and
 # modal_train_llama_adv.py. Evaluation-only packages such as vllm/lm-eval and
 # UI/dev packages are intentionally excluded.
-torch
+torch>=2.6.0
 transformers>=4.31.0
 datasets>=2.12.0
 accelerate>=0.20.3

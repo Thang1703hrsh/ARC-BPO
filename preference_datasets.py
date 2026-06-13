@@ -356,10 +356,15 @@ def get_batch_iterator(
     cache_dir: Optional[str] = None,
     min_tokens_per_chunk: int = 4,
     max_tokens_per_chunk: int = 64,
+    skip_examples: int = 0,
+    label_noise_rate: float = 0.0,
+    label_noise_seed: Optional[int] = None,
 ) -> Iterator[Dict]:
     assert n_epochs is not None or n_examples is not None, (
         "Must specify either n_epochs or n_examples"
     )
+    if not 0.0 <= float(label_noise_rate) <= 1.0:
+        raise ValueError(f"label_noise_rate must be in [0, 1], got {label_noise_rate}")
     if silent:
         datasets.logging.disable_progress_bar()
         datasets.logging.set_verbosity_error()
@@ -367,6 +372,9 @@ def get_batch_iterator(
     with TemporarilySeededRandom(seed):
         permutation_seeds = iter(np.random.randint(0, 2**32, size=1000000).tolist())
         flat_data = []
+        noise_rng = random.Random(seed if label_noise_seed is None else label_noise_seed)
+        noisy_pair_count = 0
+        total_pair_count = 0
 
         for prompt, data in get_dataset_from_hf(
             hf_dataset_repo_names,
@@ -374,21 +382,43 @@ def get_batch_iterator(
             silent=silent,
             cache_dir=cache_dir,
         ).items():
+            pairs = data["pairs"]
+            if label_noise_rate > 0 and not sft_mode:
+                noisy_pairs = []
+                for pair in pairs:
+                    total_pair_count += 1
+                    if noise_rng.random() < label_noise_rate:
+                        noisy_pairs.append((pair[1], pair[0]))
+                        noisy_pair_count += 1
+                    else:
+                        noisy_pairs.append(pair)
+                pairs = noisy_pairs
+            else:
+                total_pair_count += len(pairs)
             flat_data.append(
                 (
                     prompt,
                     data["prompt_dict"],
                     data["responses"],
-                    data["pairs"],
+                    pairs,
                     data["sft_target"],
                     data.get("response_scores", []),
                 )
+            )
+        if label_noise_rate > 0 and not silent and not sft_mode:
+            print(
+                "Applied preference label noise: "
+                f"swapped {noisy_pair_count}/{total_pair_count} pairs "
+                f"({noisy_pair_count / max(total_pair_count, 1):.2%}), "
+                f"target rate={label_noise_rate:.2%}, "
+                f"seed={seed if label_noise_seed is None else label_noise_seed}"
             )
 
     collate_fn = get_collate_fn(tokenizer)
 
     epoch_idx = 0
     example_idx = 0
+    skipped_examples = 0
     done = False
     while True:
         if n_epochs is not None and epoch_idx >= n_epochs:
@@ -421,6 +451,9 @@ def get_batch_iterator(
                     min_tokens_per_chunk=min_tokens_per_chunk,
                 )
                 if batch_element is None:
+                    continue
+                if skipped_examples < skip_examples:
+                    skipped_examples += 1
                     continue
                 batch_element = {k: v for k, v in batch_element.items() if "rejected" not in k}
                 batch.append(batch_element)
@@ -455,6 +488,9 @@ def get_batch_iterator(
                         rejected_score=rejected_score,
                     )
                     if batch_element is None:
+                        continue
+                    if skipped_examples < skip_examples:
+                        skipped_examples += 1
                         continue
                     batch.append(batch_element)
                     example_idx += 1

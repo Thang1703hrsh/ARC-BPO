@@ -23,6 +23,10 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/output}"
 LOG_DIR="${LOG_DIR:-${OUTPUT_DIR}/logs}"
 
+# Run from the repo root so relative paths inside train.py/Hydra always resolve
+# correctly even when this script is launched from another directory by SLURM.
+cd "${REPO_ROOT}"
+
 MODEL_CONFIG="${MODEL_CONFIG:-llama_8b}"
 DATASETS_RAW="${DATASETS_RAW:-princeton-nlp/llama3-ultrafeedback-armorm}"
 TRAIN_SPLIT="${TRAIN_SPLIT:-train}"

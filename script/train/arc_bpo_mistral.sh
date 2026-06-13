@@ -61,6 +61,7 @@ DO_FIRST_EVAL="${DO_FIRST_EVAL:-true}"
 N_EVAL_EXAMPLES="${N_EVAL_EXAMPLES:-64}"
 EVAL_BATCH_SIZE="${EVAL_BATCH_SIZE:-16}"
 SAVE_CHECKPOINT="${SAVE_CHECKPOINT:-true}"
+SAVE_EVERY_EXAMPLES="${SAVE_EVERY_EXAMPLES:-5000}"
 MIN_LOG_INTERVAL_SECS="${MIN_LOG_INTERVAL_SECS:-1.0}"
 
 USE_LORA="${USE_LORA:-true}"
@@ -139,6 +140,7 @@ CMD=(
   eval_batch_size="${EVAL_BATCH_SIZE}"
   n_eval_examples="${N_EVAL_EXAMPLES}"
   save_checkpoint="${SAVE_CHECKPOINT}"
+  save_every_examples="${SAVE_EVERY_EXAMPLES}"
   do_first_eval="${DO_FIRST_EVAL}"
   activation_checkpointing="${ACTIVATION_CHECKPOINTING}"
   wandb.enabled=false

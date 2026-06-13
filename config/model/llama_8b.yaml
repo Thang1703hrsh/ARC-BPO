@@ -31,6 +31,11 @@ baseline_u: 10.0
 # lora config
 use_lora: true
 
+# Optional PEFT LoRA adapter repo/path to continue training from.
+# When set, train.py loads this adapter with is_trainable=True instead of
+# initializing a fresh LoRA adapter.
+adapter_path: null
+
 lora_r: 32
 lora_alpha: 64
 lora_dropout: 0.05

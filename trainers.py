@@ -164,7 +164,9 @@ class BasicTrainer(object):
         self.total_steps = int(total_steps)
         rank0_print(f"Computed total_steps={self.total_steps}")
         self.eval_every = self.config.batch_size * 10
-        self.save_every = self.eval_every * 10
+        configured_save_every = int(getattr(self.config, "save_every_examples", 0) or 0)
+        self.save_every = configured_save_every if configured_save_every > 0 else self.eval_every * 10
+        self.next_save_example = self.save_every
 
         self.policy = policy
         self.reference_model = reference_model
@@ -177,6 +179,9 @@ class BasicTrainer(object):
             n_examples=config.n_examples,
             batch_size=config.batch_size,
             silent=rank != 0,
+            skip_examples=int(getattr(config, "skip_examples", 0)),
+            label_noise_rate=float(getattr(config, "label_noise_rate", 0.0)),
+            label_noise_seed=getattr(config, "label_noise_seed", None),
         )
         rank0_print("Loaded train data iterator")
         if int(config.n_eval_examples) > 0:
@@ -1391,13 +1396,6 @@ class BasicTrainer(object):
                                 {"reference_samples": reference_text_table},
                                 step=self.example_counter,
                             )
-                if (
-                    self.config.save_checkpoint
-                    and (self.example_counter > 0)
-                    and (self.example_counter % self.save_every) == 0
-                ):
-                    self.save_checkpoint(step=self.batch_counter)
-
             #### END EVALUATION ####
 
             #### BEGIN TRAINING ####
@@ -1452,6 +1450,20 @@ class BasicTrainer(object):
 
             self.batch_counter += 1
             self.example_counter += self.config.batch_size
+
+            if (
+                self.config.save_checkpoint
+                and self.save_every > 0
+                and self.example_counter > 0
+                and self.example_counter >= self.next_save_example
+            ):
+                rank0_print(
+                    f"Saving checkpoint after {self.example_counter} train examples "
+                    f"(update {self.batch_counter})"
+                )
+                self.save_checkpoint(step=self.batch_counter)
+                while self.next_save_example <= self.example_counter:
+                    self.next_save_example += self.save_every
 
             if last_log is None or time.time() - last_log > self.config.minimum_log_interval_secs:
                 mean_train_metrics = {k: sum(v) / len(v) for k, v in batch_metrics.items()}

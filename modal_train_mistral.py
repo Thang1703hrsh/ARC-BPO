@@ -54,7 +54,7 @@ image = (
     modal.Image.debian_slim(python_version="3.10")
     .apt_install("git")
     .pip_install(
-        "torch",
+        "torch>=2.6.0",
         "transformers>=4.31.0",
         "datasets>=2.12.0",
         "accelerate>=0.20.3",
@@ -284,6 +284,26 @@ def ls_outputs():
         print(f"{indent}{os.path.basename(root) or OUTPUT_DIR}/")
         for f in files:
             print(f"{indent}  {f}")
+
+
+@app.function(image=image, gpu="A100", timeout=60 * 5)
+def _check_versions():
+    import torch
+    import transformers
+
+    print(f"torch: {torch.__version__}")
+    print(f"torch cuda: {torch.version.cuda}")
+    print(f"cuda available: {torch.cuda.is_available()}")
+    print(f"gpu count: {torch.cuda.device_count()}")
+    if torch.cuda.is_available():
+        print(f"gpu 0: {torch.cuda.get_device_name(0)}")
+    print(f"transformers: {transformers.__version__}")
+
+
+@app.local_entrypoint()
+def check_versions():
+    """Print torch/CUDA/transformers versions inside the Modal image."""
+    _check_versions.remote()
 
 
 @app.local_entrypoint()
