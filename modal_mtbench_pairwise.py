@@ -2,8 +2,8 @@
 Run MT-Bench pairwise win-rate evaluation on Modal.
 
 This wraps the vendored FastChat MT-Bench harness:
-  1. Serve model A with vLLM and generate MT-Bench answers.
-  2. Serve model B with vLLM and generate MT-Bench answers.
+  1. Download/merge model A if it is a PEFT LoRA adapter, then serve with vLLM.
+  2. Download/merge model B if it is a PEFT LoRA adapter, then serve with vLLM.
   3. Run FastChat pairwise-all judging with two judge models.
   4. Print win/loss/tie and adjusted win-rate via show_result.py.
 
@@ -46,6 +46,7 @@ RUN_VERSION = "mtbench-pairwise-two-judges-v1"
 FASTCHAT_SRC = "/root/FastChat"
 VOLUME_ROOT = "/vol/output"
 MTBENCH_ROOT = f"{VOLUME_ROOT}/mtbench_pairwise"
+MODEL_ROOT = f"{VOLUME_ROOT}/generation_quality_models"
 
 
 app = modal.App(APP_NAME)
@@ -60,9 +61,11 @@ image = (
         "transformers>=4.48.0,<4.57.0",
         "accelerate",
         "huggingface_hub",
+        "peft",
         "safetensors",
         "vllm>=0.8.5,<0.9.0",
         "openai>=1.0.0",
+        "anthropic",
         "shortuuid",
         "pandas",
         "numpy",
@@ -112,6 +115,104 @@ def _run_label(model_a_id: str, model_b_id: str, first_n: int) -> str:
     return f"{_sanitize_id(model_a_id)}__vs__{_sanitize_id(model_b_id)}__{suffix}"
 
 
+def _patch_tokenizer_config(model_dir: str):
+    import json
+    import os
+
+    tokenizer_config = os.path.join(model_dir, "tokenizer_config.json")
+    if not os.path.isfile(tokenizer_config):
+        return
+    with open(tokenizer_config, encoding="utf-8") as f:
+        data = json.load(f)
+    if data.get("tokenizer_class") == "TokenizersBackend":
+        data["tokenizer_class"] = "PreTrainedTokenizerFast"
+        with open(tokenizer_config, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        print("[TOKENIZER] Patched tokenizer_class TokenizersBackend -> PreTrainedTokenizerFast")
+
+
+def _patch_model_config(model_dir: str):
+    import json
+    import os
+
+    config_path = os.path.join(model_dir, "config.json")
+    if not os.path.isfile(config_path):
+        return
+    with open(config_path, encoding="utf-8") as f:
+        data = json.load(f)
+
+    changed = False
+    if data.get("head_dim") is None:
+        hidden_size = data.get("hidden_size")
+        num_attention_heads = data.get("num_attention_heads")
+        if hidden_size and num_attention_heads:
+            data["head_dim"] = int(hidden_size) // int(num_attention_heads)
+            changed = True
+            print(f"[CONFIG] Patched head_dim -> {data['head_dim']}")
+
+    if changed:
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+
+
+def _prepare_model_if_needed(model_path: str, model_label: str):
+    import os
+    import subprocess
+
+    safe_label = _sanitize_id(model_label or model_path)
+    model_local = f"{MODEL_ROOT}/merged/{safe_label}"
+    if os.path.isdir(model_local) and os.listdir(model_local):
+        print(f"[SKIP MODEL] {model_local}")
+        _patch_tokenizer_config(model_local)
+        _patch_model_config(model_local)
+        output_volume.commit()
+        return model_local
+
+    download_local = f"{MODEL_ROOT}/downloads/{safe_label}"
+    if not os.path.isdir(download_local) or not os.listdir(download_local):
+        print(f"[DOWNLOAD] {model_path}")
+        subprocess.run(["hf", "download", model_path, "--local-dir", download_local], check=True)
+
+    adapter_config = os.path.join(download_local, "adapter_config.json")
+    if not os.path.isfile(adapter_config):
+        print(f"[FULL MODEL] using downloaded model at {download_local}")
+        _patch_tokenizer_config(download_local)
+        _patch_model_config(download_local)
+        output_volume.commit()
+        return download_local
+
+    print(f"[LORA ADAPTER] merging {download_local}")
+    import torch
+    from peft import PeftConfig, PeftModel
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    peft_config = PeftConfig.from_pretrained(download_local)
+    base_model_name = peft_config.base_model_name_or_path
+    print(f"[BASE MODEL] {base_model_name}")
+
+    base_model = AutoModelForCausalLM.from_pretrained(
+        base_model_name,
+        torch_dtype=torch.float16,
+        low_cpu_mem_usage=True,
+        device_map="auto",
+        trust_remote_code=True,
+    )
+    model = PeftModel.from_pretrained(base_model, download_local)
+    model = model.merge_and_unload()
+    os.makedirs(model_local, exist_ok=True)
+    model.save_pretrained(model_local, safe_serialization=True)
+    tokenizer = AutoTokenizer.from_pretrained(base_model_name, use_fast=True, trust_remote_code=True)
+    tokenizer.save_pretrained(model_local)
+    _patch_tokenizer_config(model_local)
+    _patch_model_config(model_local)
+    output_volume.commit()
+    del model
+    del base_model
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    return model_local
+
+
 @app.function(**_SHARED, timeout=60 * 60 * 24)
 def run_pairwise(
     model_a_path: str,
@@ -123,13 +224,14 @@ def run_pairwise(
     judge_models: str = "meta/llama3-70b-instruct,mistralai/Mixtral-8x22B-Instruct-v0.1",
     first_n: int = 0,
     run_label: str = "",
-    answer_parallel: int = 16,
+    answer_parallel: int = 4,
     judge_parallel: int = 8,
     max_tokens: int = 1024,
     force_temperature: float = 0.0,
     vllm_dtype: str = "float16",
-    vllm_gpu_memory_utilization: float = 0.80,
+    vllm_gpu_memory_utilization: float = 0.55,
     vllm_max_model_len: int = 4096,
+    vllm_max_num_seqs: int = 8,
     force_answer_regen: bool = False,
     force_judge_regen: bool = True,
 ):
@@ -172,6 +274,16 @@ def run_pairwise(
     print(f"[JUDGES] {judge_models}")
     print(f"[FIRST_N] {first_n or 'full'}")
 
+    model_a_local = _prepare_model_if_needed(model_a_path, model_a_id)
+    model_b_local = _prepare_model_if_needed(model_b_path, model_b_id)
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+
     def wait_for_vllm(port: int, timeout_s: int = 1800):
         url = f"http://127.0.0.1:{port}/v1/models"
         start = time.time()
@@ -205,6 +317,9 @@ def run_pairwise(
             str(vllm_gpu_memory_utilization),
             "--max-model-len",
             str(vllm_max_model_len),
+            "--max-num-seqs",
+            str(vllm_max_num_seqs),
+            "--enforce-eager",
         ]
         print("[VLLM START] " + " ".join(cmd))
         proc = subprocess.Popen(cmd, cwd=work_dir, env=env)
@@ -262,8 +377,8 @@ def run_pairwise(
         finally:
             stop_process(proc)
 
-    generate_answers(model_a_path, model_a_id, 8000)
-    generate_answers(model_b_path, model_b_id, 8001)
+    generate_answers(model_a_local, model_a_id, 8000)
+    generate_answers(model_b_local, model_b_id, 8001)
 
     judge_outputs = {}
     judges = [judge.strip() for judge in judge_models.split(",") if judge.strip()]
@@ -389,6 +504,14 @@ def main(
     judge_models: str = "meta/llama3-70b-instruct,mistralai/Mixtral-8x22B-Instruct-v0.1",
     first_n: int = 0,
     run_label: str = "",
+    answer_parallel: int = 4,
+    judge_parallel: int = 8,
+    max_tokens: int = 1024,
+    vllm_gpu_memory_utilization: float = 0.55,
+    vllm_max_model_len: int = 4096,
+    vllm_max_num_seqs: int = 8,
+    force_answer_regen: bool = False,
+    force_judge_regen: bool = True,
 ):
     """Launch MT-Bench pairwise-all evaluation."""
     model_a_id = model_a_id or _sanitize_id(model_a_path)
@@ -404,6 +527,14 @@ def main(
         judge_models=judge_models,
         first_n=first_n,
         run_label=run_label,
+        answer_parallel=answer_parallel,
+        judge_parallel=judge_parallel,
+        max_tokens=max_tokens,
+        vllm_gpu_memory_utilization=vllm_gpu_memory_utilization,
+        vllm_max_model_len=vllm_max_model_len,
+        vllm_max_num_seqs=vllm_max_num_seqs,
+        force_answer_regen=force_answer_regen,
+        force_judge_regen=force_judge_regen,
     )
     print("[LAUNCHED] MT-Bench pairwise run submitted.")
     print(f"  App:       {APP_NAME}")

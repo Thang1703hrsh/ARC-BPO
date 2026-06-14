@@ -2,14 +2,21 @@
 Quick Open LLM Leaderboard v1 evaluation for a Qwen2.5 ARC-BPO LoRA adapter.
 
 Default model:
-  ducthang1703/qwen25-7b-instruct-arc-bpo-uniform-lora-10k
+  ducthang1703/qwen25-7b-instruct-arc-bpo-uniform-lora-smoke-64
+
+Note:
+  The HF repo name contains "smoke-64", but this script labels it as the
+  full-data checkpoint because that repo was named incorrectly.
 
 Default tasks:
   arc_challenge      25-shot
+  hellaswag          10-shot
   truthfulqa_mc2      0-shot
+  mmlu                5-shot
+  winogrande          5-shot
   gsm8k               5-shot
 
-Run the default 3-task eval:
+Run the default 6-task eval:
   modal run --detach modal_eval_qwen_lora.py::main
 
 Run a subset:
@@ -23,9 +30,9 @@ import modal
 
 
 APP_NAME = "tbpo-qwen25-lora-eval"
-DEFAULT_MODEL = "ducthang1703/qwen25-7b-instruct-arc-bpo-uniform-lora-10k"
-DEFAULT_MODEL_LABEL = "qwen25-7b-instruct-arc-bpo-uniform-lora-10k"
-RUN_VERSION = "qwen25-arc-bpo-lora-10k-3task-v1"
+DEFAULT_MODEL = "ducthang1703/qwen25-7b-instruct-arc-bpo-uniform-lora-smoke-64"
+DEFAULT_MODEL_LABEL = "qwen25-7b-instruct-arc-bpo-uniform-lora-full"
+RUN_VERSION = "qwen25-arc-bpo-lora-full-6task-v1"
 
 VOLUME_ROOT = "/vol/output/open_llm_eval"
 
@@ -62,7 +69,10 @@ image = (
 
 OPEN_LLM_TASKS = [
     ("arc_challenge", 25),
+    ("hellaswag", 10),
     ("truthfulqa_mc2", 0),
+    ("mmlu", 5),
+    ("winogrande", 5),
     ("gsm8k", 5),
 ]
 
@@ -72,6 +82,11 @@ TASK_ALIASES = {
     "truthfulqa": "truthfulqa_mc2",
     "truthfulqa_mc": "truthfulqa_mc2",
     "truthfulqa_mc2": "truthfulqa_mc2",
+    "hellaswag": "hellaswag",
+    "hs": "hellaswag",
+    "mmlu": "mmlu",
+    "winogrande": "winogrande",
+    "wino": "winogrande",
     "gsm": "gsm8k",
     "gsm8k": "gsm8k",
 }
@@ -288,7 +303,10 @@ def _read_results(model_label: str = DEFAULT_MODEL_LABEL):
 
     metric_keys = {
         "arc_challenge": ["acc_norm,none", "acc,none"],
+        "hellaswag": ["acc_norm,none", "acc,none"],
         "truthfulqa_mc2": ["acc,none"],
+        "mmlu": ["acc,none", "acc_norm,none"],
+        "winogrande": ["acc,none"],
         "gsm8k": ["exact_match,flexible-extract", "acc,none", "exact_match,none"],
     }
 
@@ -313,7 +331,7 @@ def _read_results(model_label: str = DEFAULT_MODEL_LABEL):
                         break
 
     print(f"\n{'=' * 45}")
-    print(f" Open LLM Leaderboard 3-task - {model_label}")
+    print(f" Open LLM Leaderboard 6-task - {model_label}")
     print(f"{'=' * 45}")
     print(f"  Results dir: {results_dir}")
     print(f"  JSON files:  {len(result_files)}")
@@ -344,7 +362,7 @@ def main(
     max_model_len: int = 2048,
     batch_size: str = "4",
 ):
-    """Download and merge the LoRA adapter, then run the selected 3-task eval."""
+    """Download and merge the LoRA adapter, then run the selected 6-task eval."""
     if model_label == DEFAULT_MODEL_LABEL and model_path != DEFAULT_MODEL:
         model_label = _label_from_model(model_path)
 
@@ -358,7 +376,7 @@ def main(
         max_model_len=max_model_len,
         batch_size=batch_size,
     )
-    print("[LAUNCHED] 3-task leaderboard eval running on Modal.")
+    print("[LAUNCHED] 6-task leaderboard eval running on Modal.")
     print(f"  App:     {APP_NAME}")
     print(f"  Version: {RUN_VERSION}")
     print(f"  Results: modal run modal_eval_qwen_lora.py::results --model-label {model_label}")
@@ -366,5 +384,5 @@ def main(
 
 @app.local_entrypoint()
 def results(model_label: str = DEFAULT_MODEL_LABEL):
-    """Print saved 3-task leaderboard results table from the Modal volume."""
+    """Print saved 6-task leaderboard results table from the Modal volume."""
     _read_results.remote(model_label=model_label)

@@ -16,9 +16,16 @@ Run a smoke test:
 
 Run the paper-size setting:
   modal run --detach modal_generation_diversity.py::main \
-    --model-path <candidate-full-or-lora-repo> \
-    --model-label <candidate_id> \
+    --model-path ducthang1703/llama3-arc-bpo-uniform-lora-full-bs64 \
+    --model-label llama3_arc_bpo_lora_full_bs64 \
     --num-prompts 100
+
+Force a clean rerun if a previous run wrote partial generations:
+  modal run --detach modal_generation_diversity.py::main \
+    --model-path ducthang1703/llama3-arc-bpo-uniform-lora-full-bs64 \
+    --model-label llama3_arc_bpo_lora_full_bs64 \
+    --num-prompts 100 \
+    --force-regen
 
 Print saved results:
   modal run modal_generation_diversity.py::results --run-label <run_label>
@@ -166,6 +173,46 @@ def _extract_mean_entropy(choice) -> float | None:
     return sum(entropies) / len(entropies)
 
 
+def _patch_tokenizer_config(model_dir: str):
+    import json
+    import os
+
+    tokenizer_config = os.path.join(model_dir, "tokenizer_config.json")
+    if not os.path.isfile(tokenizer_config):
+        return
+    with open(tokenizer_config, encoding="utf-8") as f:
+        data = json.load(f)
+    if data.get("tokenizer_class") == "TokenizersBackend":
+        data["tokenizer_class"] = "PreTrainedTokenizerFast"
+        with open(tokenizer_config, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        print("[TOKENIZER] Patched tokenizer_class TokenizersBackend -> PreTrainedTokenizerFast")
+
+
+def _patch_model_config(model_dir: str):
+    import json
+    import os
+
+    config_path = os.path.join(model_dir, "config.json")
+    if not os.path.isfile(config_path):
+        return
+    with open(config_path, encoding="utf-8") as f:
+        data = json.load(f)
+
+    changed = False
+    if data.get("head_dim") is None:
+        hidden_size = data.get("hidden_size")
+        num_attention_heads = data.get("num_attention_heads")
+        if hidden_size and num_attention_heads:
+            data["head_dim"] = int(hidden_size) // int(num_attention_heads)
+            changed = True
+            print(f"[CONFIG] Patched head_dim -> {data['head_dim']}")
+
+    if changed:
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+
+
 def _prepare_model_if_needed(model_path: str, model_label: str):
     import os
     import subprocess
@@ -173,6 +220,8 @@ def _prepare_model_if_needed(model_path: str, model_label: str):
     model_local = f"{MODEL_ROOT}/merged/{model_label}"
     if os.path.isdir(model_local) and os.listdir(model_local):
         print(f"[SKIP MODEL] {model_local}")
+        _patch_tokenizer_config(model_local)
+        _patch_model_config(model_local)
         output_volume.commit()
         return model_local
 
@@ -184,6 +233,8 @@ def _prepare_model_if_needed(model_path: str, model_label: str):
     adapter_config = f"{download_local}/adapter_config.json"
     if not os.path.isfile(adapter_config):
         print(f"[FULL MODEL] using downloaded model at {download_local}")
+        _patch_tokenizer_config(download_local)
+        _patch_model_config(download_local)
         output_volume.commit()
         return download_local
 
@@ -209,7 +260,13 @@ def _prepare_model_if_needed(model_path: str, model_label: str):
     model.save_pretrained(model_local, safe_serialization=True)
     tokenizer = AutoTokenizer.from_pretrained(base_model_name, use_fast=True, trust_remote_code=True)
     tokenizer.save_pretrained(model_local)
+    _patch_tokenizer_config(model_local)
+    _patch_model_config(model_local)
     output_volume.commit()
+    del model
+    del base_model
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
     return model_local
 
 
@@ -270,7 +327,19 @@ def run_diversity_eval(
             break
 
     output_file = f"{work_dir}/generations.jsonl"
-    if not os.path.isfile(output_file) or force_regen:
+    expected_generations = len(prompts) * samples_per_prompt
+    regenerate = force_regen or not os.path.isfile(output_file)
+    if not regenerate:
+        with open(output_file, encoding="utf-8") as f:
+            existing_generations = sum(1 for line in f if line.strip())
+        if existing_generations != expected_generations:
+            print(
+                f"[REGEN] existing generations={existing_generations}, "
+                f"expected={expected_generations}; regenerating."
+            )
+            regenerate = True
+
+    if regenerate:
         env = os.environ.copy()
         env["TOKENIZERS_PARALLELISM"] = "false"
         env["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
@@ -404,6 +473,7 @@ def main(
     num_prompts: int = 100,
     samples_per_prompt: int = 1,
     run_label: str = "",
+    force_regen: bool = False,
 ):
     model_label = model_label or _sanitize_id(model_path)
     run_label = run_label or _run_label(model_label, num_prompts, samples_per_prompt)
@@ -413,6 +483,7 @@ def main(
         num_prompts=num_prompts,
         samples_per_prompt=samples_per_prompt,
         run_label=run_label,
+        force_regen=force_regen,
     )
     print("[LAUNCHED] Generation diversity eval submitted.")
     print(f"  Run label: {run_label}")

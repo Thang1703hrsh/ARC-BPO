@@ -81,6 +81,8 @@ OPENAI_MODEL_LIST = (
     "gpt-4-0125-preview",
     "gpt-4-turbo-browsing",
     "gpt-4-turbo-2024-04-09",
+    "gpt-4o",
+    "gpt-4o-mini",
     "gpt2-chatbot",
     "im-also-a-good-gpt2-chatbot",
     "im-a-good-gpt2-chatbot",
@@ -92,8 +94,15 @@ OPENAI_MODEL_LIST = (
     "o1-preview",
     "o1-mini",
     "meta/llama3-70b-instruct",
+    "meta-llama/Meta-Llama-3-70B-Instruct",
+    "meta-llama/Llama-3-70B-Instruct",
+    "meta-llama/Llama-3-70b-chat-hf",
+    "meta-llama/Meta-Llama-3.1-70B-Instruct",
+    "meta-llama/Llama-3.1-70B-Instruct-Turbo",
+    "meta-llama/Llama-3.3-70B-Instruct-Turbo",
     "qwen/qwen3-235b-a22b",
-    "mistralai/mixtral-8x22b-instruct-v0.1"
+    "mistralai/mixtral-8x22b-instruct-v0.1",
+    "mistralai/Mixtral-8x22B-Instruct-v0.1",
 )
 
 
