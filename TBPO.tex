@@ -752,41 +752,16 @@ The similar performance of TBPO-Q and TBPO-A is expected from the theory: the tw
 
 Overall, TBPO delivers the strongest mean performance across two model families, with large gains on reasoning-centric benchmarks and no evidence of systematic trade-offs on broader language understanding. To better understand these reasoning gains, we provide qualitative case studies on reasoning questions in Appendix~\ref{app:reasoning_case_study}.
 
-
-% A common concern with preference optimization is that it can over-specialize a model to the preference dataset and inadvertently degrade general-purpose capabilities. To assess general model performance, we adopt the protocol of the \textbf{HuggingFace Open LLM Leaderboard}~\cite{huggingface_open_llm_leaderboard_v1}, implemented via the Language Model Evaluation Harness~\cite{eleutherai_lm_eval_harness_concept}. This framework provides a robust assessment across six established benchmarks targeting key LLM capabilities:
-% commonsense reasoning (ARC~\cite{clark2018think}, HellaSwag~\cite{zellers2019hellaswag}, and Winogrande~\cite{sakaguchi2021winogrande}), 
-% multi-task language understanding (MMLU~\cite{hendrycks2020mmlu}),
-% factual accuracy (TruthfulQA~\cite{lin2021truthfulqa}),
-% mathematical reasoning (GSM8k~\cite{cobbe2021gsm8k}).
-% Together, these benchmarks provide a rigorous and comprehensive framework for assessing both alignment quality and general model competence.
-
-% Table~\ref{tab:general_style_like_example} reports the results. Across both backbones, TBPO improves the overall average while remaining competitive on every individual benchmark, suggesting token-level ratio matching strengthens alignment without sacrificing core capabilities.
-
-% On \textbf{Mistral 7B v0.1}, sequence-level preference optimization already yields large gains over SFT (DPO: 59.30 vs.\ SFT: 55.59). TBPO further improves the aggregate performance: \textbf{TBPO-Q achieves the best average} (\textbf{60.95}) with TBPO-A close behind (60.73), outperforming the strongest non-TBPO baseline (TIS-DPO: 59.66). The improvements are broad and especially pronounced on reasoning-heavy evaluations: TBPO-Q attains the best GSM8K (39.34 vs.\ 34.87 for DPO and 18.49 for SFT) and also the best MMLU (60.82) and Winogrande (78.58). Notably, while DPO slightly reduces TruthfulQA relative to SFT (42.30 vs.\ 43.67), TBPO restores and improves performance (44.47--44.40), suggesting TBPO can avoid capability regressions sometimes observed with preference training. Meanwhile, on benchmarks where other token-level methods peak (e.g., ARC for TDPO, TruthfulQA for TIS-DPO), TBPO remains highly competitive, yielding the strongest overall average.
-
-% On \textbf{Llama 3 8B}, the advantage is even clearer: \textbf{TBPO-A achieves the best average} (\textbf{70.50}) with TBPO-Q close behind (70.38), improving substantially over TDPO (67.91). These gains concentrate on the most diagnostic reasoning/knowledge tasks: TBPO improves ARC by about +5 points over TDPO (64.08 vs.\ 59.04), boosts GSM8K by about +4 points (79.22 vs.\ 75.10), and improves Winogrande by about +3 points (79.63 vs.\ 76.55). The two variants show a consistent pattern: TBPO-A tends to lead on ARC/GSM8K/Winogrande, while TBPO-Q attains the best MMLU (64.92) and TruthfulQA (53.36), indicating the framework is robust to how we formulate the preference model and that either instantiation can be used without sacrificing overall performance.
-
-% Overall, Table~\ref{tab:general_style_like_example} shows that TBPO delivers the strongest mean performance across two model families, with particularly large improvements on reasoning-centric benchmarks and no evidence of systematic trade-offs on broader language understanding tasks.
-
 \subsection{Generation Quality}
 
 \paragraph{MT-Bench.} To evaluate generation quality, we run MT-Bench~\cite{zheng2023judging} under the standard LLM-as-a-judge protocol and report pairwise win/tie/lose rates against prior preference-optimization baselines. Figure~\ref{fig:mtbench} shows that TBPO-Q and TBPO-A consistently improve win rates with low loss rates; against the strongest baseline (TDPO), many comparisons are ties, but TBPO wins the majority of decisive (non-tie) cases. This suggesting the advantage is not driven by a small number of outliers. The overall ordering and effect sizes are consistent across both judges, supporting the conclusion that TBPO improves generation quality in a robust, judge-agnostic manner, and that TBPO-Q and TBPO-A are comparably strong.
 
 \paragraph{Harmless and Helpfulness.}
 
-
-% \begin{figure}[t] % single-column float in two-column mode
-%   \centering
-%   \includegraphics[width=\columnwidth,page=1]{hh.pdf} % or width=\linewidth
-%   \caption{LC win rate vs.\ average response length on TLDR for Llama~3~8B, judged by Llama~3~70B and DeepSeek-V3. TBPO achieves highest win rate with shorter outputs, suggesting strong OOD generalization despite training only on UltraFeedback dataset.}
-%   \label{fig:tldr}
-% \end{figure}
-
-To evaluate preference alignment in safety-sensitive dialogue, we test on 200 held-out samples from the \href{https://huggingface.co/datasets/Anthropic/hh-rlhf}{Anthropic HH-RLHF} dataset. 
-Using an LLM-as-a-judge protocol, we report pairwise and length-controlled (LC) win rates~\cite{alpaca_eval}. 
 Figure~\ref{fig:hh} shows LC win rate versus average response length, highlighting the verbosity--quality trade-off.
 
 Across both judges, TBPO variants achieve the strongest preference alignment while producing shorter responses than competing methods, ruling out verbosity as the primary driver of higher win rates. SFT is the most verbose model yet does not achieve top performance, whereas TBPO attains the best LC win rates with substantially shorter generations. Among TBPO variants, TBPO-Q produces the most concise responses while remaining at the top of the win-rate plot, and TBPO-A achieves the highest (or near-highest) win rates with only a modest increase in length, indicating a controllable conciseness–performance trade-off. In contrast, strong sequence- and token-level baselines improve over SFT but generally require longer responses and still trail TBPO. The consistent ordering across judges and large margins relative to standard errors suggest TBPO’s gains reflect genuine improvements in helpful-and-harmless response quality rather than judge bias or verbosity effects.
+
 \paragraph{Generation Diversity.}
 \begin{figure}[t]
     \centering

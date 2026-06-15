@@ -57,6 +57,9 @@ image = (
         "peft",
         "safetensors",
         "vllm>=0.8.5,<0.9.0",
+        "fastapi==0.115.12",
+        "starlette==0.46.2",
+        "prometheus-fastapi-instrumentator==7.0.2",
         "openai>=1.0.0",
         "numpy",
         "requests",
@@ -137,11 +140,18 @@ def _patch_tokenizer_config(model_dir: str):
         return
     with open(tokenizer_config, encoding="utf-8") as f:
         data = json.load(f)
+    changed = False
     if data.get("tokenizer_class") == "TokenizersBackend":
         data["tokenizer_class"] = "PreTrainedTokenizerFast"
+        changed = True
+        print("[TOKENIZER] Patched tokenizer_class TokenizersBackend -> PreTrainedTokenizerFast")
+    if isinstance(data.get("extra_special_tokens"), list):
+        data["extra_special_tokens"] = {}
+        changed = True
+        print("[TOKENIZER] Patched extra_special_tokens list -> dict")
+    if changed:
         with open(tokenizer_config, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
-        print("[TOKENIZER] Patched tokenizer_class TokenizersBackend -> PreTrainedTokenizerFast")
 
 
 def _patch_model_config(model_dir: str):
@@ -168,8 +178,48 @@ def _patch_model_config(model_dir: str):
             json.dump(data, f, indent=2)
 
 
+def _looks_like_full_model_dir(model_dir: str) -> bool:
+    import glob
+    import os
+
+    if not os.path.isdir(model_dir):
+        return False
+    has_config = os.path.isfile(os.path.join(model_dir, "config.json"))
+    has_weights = any(
+        glob.glob(os.path.join(model_dir, pattern))
+        for pattern in ("*.safetensors", "pytorch_model*.bin", "model*.bin")
+    )
+    return has_config and has_weights
+
+
+def _find_full_model_dir(download_dir: str):
+    import glob
+    import os
+
+    candidates = [download_dir]
+    candidates.extend(sorted(glob.glob(os.path.join(download_dir, "LATEST"))))
+    candidates.extend(sorted(glob.glob(os.path.join(download_dir, "step-*"))))
+    candidates.extend(sorted(glob.glob(os.path.join(download_dir, "checkpoint-*"))))
+    candidates.extend(
+        sorted(
+            os.path.dirname(path)
+            for path in glob.glob(os.path.join(download_dir, "**", "config.json"), recursive=True)
+        )
+    )
+
+    seen = set()
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if _looks_like_full_model_dir(candidate):
+            return candidate
+    return None
+
+
 def _prepare_model_if_needed(model_path: str, model_label: str):
     import os
+    import shutil
     import subprocess
 
     model_local = f"{MODEL_ROOT}/merged/{model_label}"
@@ -187,11 +237,20 @@ def _prepare_model_if_needed(model_path: str, model_label: str):
 
     adapter_config = os.path.join(download_local, "adapter_config.json")
     if not os.path.isfile(adapter_config):
-        print(f"[FULL MODEL] using downloaded model at {download_local}")
-        _patch_tokenizer_config(download_local)
-        _patch_model_config(download_local)
+        full_model_dir = _find_full_model_dir(download_local)
+        if full_model_dir is None:
+            raise RuntimeError(f"{model_path} is neither a PEFT LoRA adapter nor a full HF model checkpoint.")
+        if full_model_dir != download_local:
+            print(f"[FULL MODEL] found nested checkpoint at {full_model_dir}")
+            print(f"[FULL MODEL] copying to {model_local}")
+            shutil.copytree(full_model_dir, model_local, dirs_exist_ok=True)
+            full_model_dir = model_local
+        else:
+            print(f"[FULL MODEL] using downloaded model at {download_local}")
+        _patch_tokenizer_config(full_model_dir)
+        _patch_model_config(full_model_dir)
         output_volume.commit()
-        return download_local
+        return full_model_dir
 
     print(f"[LORA ADAPTER] merging {download_local}")
     import torch

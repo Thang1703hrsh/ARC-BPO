@@ -112,11 +112,23 @@ def _patch_tokenizer_config(model_dir: str):
     with open(tokenizer_config, encoding="utf-8") as f:
         data = json.load(f)
 
+    changed = False
+
     if data.get("tokenizer_class") == "TokenizersBackend":
         data["tokenizer_class"] = "PreTrainedTokenizerFast"
+        changed = True
+        print("[TOKENIZER] Patched tokenizer_class TokenizersBackend -> PreTrainedTokenizerFast")
+
+    # Some checkpoints save this field as a list. Newer transformers versions
+    # expect a mapping and fail with: AttributeError: 'list' object has no attribute 'keys'.
+    if isinstance(data.get("extra_special_tokens"), list):
+        data["extra_special_tokens"] = {}
+        changed = True
+        print("[TOKENIZER] Patched extra_special_tokens list -> dict")
+
+    if changed:
         with open(tokenizer_config, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
-        print("[TOKENIZER] Patched tokenizer_class TokenizersBackend -> PreTrainedTokenizerFast")
 
 
 def _patch_model_config(model_dir: str):
@@ -148,6 +160,58 @@ def _patch_model_config(model_dir: str):
             json.dump(data, f, indent=2)
 
 
+def _looks_like_full_model_dir(model_dir: str) -> bool:
+    import glob
+    import os
+
+    if not os.path.isdir(model_dir):
+        return False
+
+    has_config = os.path.isfile(os.path.join(model_dir, "config.json"))
+    has_weights = any(
+        glob.glob(os.path.join(model_dir, pattern))
+        for pattern in (
+            "*.safetensors",
+            "pytorch_model*.bin",
+            "model*.bin",
+        )
+    )
+    return has_config and has_weights
+
+
+def _find_full_model_dir(download_dir: str):
+    import glob
+    import os
+
+    candidates = [download_dir]
+    candidates.extend(sorted(glob.glob(os.path.join(download_dir, "LATEST"))))
+    candidates.extend(sorted(glob.glob(os.path.join(download_dir, "step-*"))))
+    candidates.extend(sorted(glob.glob(os.path.join(download_dir, "checkpoint-*"))))
+    candidates.extend(
+        sorted(
+            os.path.dirname(path)
+            for path in glob.glob(os.path.join(download_dir, "**", "config.json"), recursive=True)
+        )
+    )
+    candidates.extend(
+        sorted(
+            path
+            for path in glob.glob(os.path.join(download_dir, "*"))
+            if os.path.isdir(path)
+        )
+    )
+
+    seen = set()
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if _looks_like_full_model_dir(candidate):
+            return candidate
+
+    return None
+
+
 def _normalize_task_name(task: str) -> str:
     return TASK_ALIASES.get(task.strip(), task.strip())
 
@@ -171,43 +235,77 @@ def _vllm_model_args(
 @app.function(**_SHARED, timeout=60 * 60)
 def download_model(model_path: str = DEFAULT_MODEL, model_label: str = DEFAULT_MODEL_LABEL):
     import os
+    import shutil
     import subprocess
 
     model_local = f"{VOLUME_ROOT}/models/{model_label}"
     if os.path.isdir(model_local) and os.listdir(model_local):
-        print(f"[SKIP] {model_local} already exists in volume.")
-        _patch_tokenizer_config(model_local)
-        _patch_model_config(model_local)
-        output_volume.commit()
-        return model_local
+        if _looks_like_full_model_dir(model_local):
+            print(f"[SKIP] {model_local} already exists in volume.")
+            _patch_tokenizer_config(model_local)
+            _patch_model_config(model_local)
+            output_volume.commit()
+            return model_local
+        print(f"[REFRESH] Removing incomplete local model at {model_local}.")
+        shutil.rmtree(model_local)
 
-    adapter_local = f"{VOLUME_ROOT}/adapters/{model_label}"
+    download_local = f"{VOLUME_ROOT}/adapters/{model_label}"
 
-    print(f"[VERSION] {RUN_VERSION}")
-    print(f"[DOWNLOAD LORA] {model_path}")
-    if not os.path.isdir(adapter_local) or not os.listdir(adapter_local):
+    def download_repo():
         subprocess.run(
-            ["hf", "download", model_path, "--local-dir", adapter_local],
+            ["hf", "download", model_path, "--local-dir", download_local],
             check=True,
         )
-    else:
-        print(f"[SKIP ADAPTER] {adapter_local} already exists in volume.")
 
-    adapter_config = os.path.join(adapter_local, "adapter_config.json")
+    print(f"[VERSION] {RUN_VERSION}")
+    print(f"[DOWNLOAD MODEL] {model_path}")
+    if not os.path.isdir(download_local) or not os.listdir(download_local):
+        download_repo()
+    else:
+        print(f"[SKIP DOWNLOAD] {download_local} already exists in volume.")
+
+    adapter_config = os.path.join(download_local, "adapter_config.json")
     if not os.path.isfile(adapter_config):
+        full_model_dir = _find_full_model_dir(download_local)
+        if full_model_dir:
+            print(f"[FULL MODEL] Found checkpoint at {full_model_dir}")
+            print(f"[FULL MODEL] Copying to {model_local}")
+            shutil.copytree(full_model_dir, model_local, dirs_exist_ok=True)
+            _patch_tokenizer_config(model_local)
+            _patch_model_config(model_local)
+            output_volume.commit()
+            return model_local
+
+        print(f"[INVALID CACHE] {download_local} is not a LoRA adapter or full checkpoint.")
+        print("[INVALID CACHE] Removing cached directory and downloading again.")
+        shutil.rmtree(download_local, ignore_errors=True)
+        download_repo()
+
+    adapter_config = os.path.join(download_local, "adapter_config.json")
+    if not os.path.isfile(adapter_config):
+        full_model_dir = _find_full_model_dir(download_local)
+        if full_model_dir:
+            print(f"[FULL MODEL] Found checkpoint at {full_model_dir}")
+            print(f"[FULL MODEL] Copying to {model_local}")
+            shutil.copytree(full_model_dir, model_local, dirs_exist_ok=True)
+            _patch_tokenizer_config(model_local)
+            _patch_model_config(model_local)
+            output_volume.commit()
+            return model_local
+
         raise RuntimeError(
             f"{model_path} does not look like a PEFT LoRA adapter repo: "
             f"missing {adapter_config}"
         )
 
-    print(f"[MERGE LORA] adapter={adapter_local}")
+    print(f"[MERGE LORA] adapter={download_local}")
     print(f"[MERGE LORA] output={model_local}")
 
     import torch
     from peft import PeftConfig, PeftModel
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    peft_config = PeftConfig.from_pretrained(adapter_local)
+    peft_config = PeftConfig.from_pretrained(download_local)
     base_model_name = peft_config.base_model_name_or_path
     print(f"[BASE MODEL] {base_model_name}")
 
@@ -217,7 +315,7 @@ def download_model(model_path: str = DEFAULT_MODEL, model_label: str = DEFAULT_M
         low_cpu_mem_usage=True,
         device_map="auto",
     )
-    model = PeftModel.from_pretrained(base_model, adapter_local)
+    model = PeftModel.from_pretrained(base_model, download_local)
     model = model.merge_and_unload()
 
     os.makedirs(model_local, exist_ok=True)
@@ -253,6 +351,7 @@ def eval_open_llm_leaderboard(
         raise RuntimeError(
             f"Local model not found at {model_local}. Run download_model first."
         )
+    _patch_tokenizer_config(model_local)
     _patch_model_config(model_local)
     output_volume.commit()
 
