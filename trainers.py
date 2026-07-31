@@ -664,11 +664,15 @@ class BasicTrainer(object):
         # This is log of: R_θ = [π_θ(y_l|x)π_ref(y_w|x) / π_θ(y_w|x)π_ref(y_l|x)]^β
         beta = self.config.loss.beta
         log_R = beta * (rejected_logps_margin - chosen_logps_margin)  # (batch,)
+        chosen_rewards = beta * chosen_logps_margin.detach()
+        rejected_rewards = beta * rejected_logps_margin.detach()
 
         return (
             log_R,
             policy_chosen_logps,
             policy_rejected_logps,
+            chosen_rewards,
+            rejected_rewards,
         )
 
     def arc_bpo_concatenated_forward(
@@ -1011,6 +1015,8 @@ class BasicTrainer(object):
                 log_R,
                 policy_chosen_logps,
                 policy_rejected_logps,
+                chosen_rewards,
+                rejected_rewards,
             ) = self.BPO_SBA_concatenated_forward(self.policy, self.reference_model, batch)
 
             # Apply h function directly to sequence-level log_R
@@ -1027,6 +1033,20 @@ class BasicTrainer(object):
                 )
 
             losses = per_sample_loss
+
+            reward_accuracies = (chosen_rewards > rejected_rewards).float()
+            chosen_rewards = all_gather_if_needed(chosen_rewards, self.rank, self.world_size)
+            rejected_rewards = all_gather_if_needed(rejected_rewards, self.rank, self.world_size)
+            reward_accuracies = all_gather_if_needed(
+                reward_accuracies, self.rank, self.world_size
+            )
+
+            metrics[f"rewards_{train_test}/chosen"] = chosen_rewards.cpu().numpy().tolist()
+            metrics[f"rewards_{train_test}/rejected"] = rejected_rewards.cpu().numpy().tolist()
+            metrics[f"rewards_{train_test}/accuracies"] = reward_accuracies.cpu().numpy().tolist()
+            metrics[f"rewards_{train_test}/margins"] = (
+                (chosen_rewards - rejected_rewards).cpu().numpy().tolist()
+            )
 
             policy_rejected_logps = all_gather_if_needed(
                 policy_rejected_logps.detach(), self.rank, self.world_size

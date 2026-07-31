@@ -1,207 +1,313 @@
-# TBPO: Token-Level Bregman Preference Optimization
+# ARC-BPO: Advantage-Referenced Chunk-Level Bregman Preference Optimization
 
 Official implementation of
 
-> **TokenRatio: Principled Token-Level Preference Optimization via Ratio Matching**
+> Advantage-Referenced Chunk-Level Bregman Preference Optimization
 
 <p align="left">
-  <a href="#installation"><img alt="python" src="https://img.shields.io/badge/python-3.11-blue.svg"></a>
-  <a href="#installation"><img alt="pytorch" src="https://img.shields.io/badge/pytorch-cu124-ee4c2c.svg"></a>
+  <a href="#installation"><img alt="python" src="https://img.shields.io/badge/python-3.10%2B-blue.svg"></a>
+  <a href="#installation"><img alt="pytorch" src="https://img.shields.io/badge/pytorch-cuda-ee4c2c.svg"></a>
   <a href="#license"><img alt="license" src="https://img.shields.io/badge/license-Apache%202.0-green.svg"></a>
 </p>
 
----
+ARC-BPO is an offline preference-optimization method for aligning language
+models from pairwise feedback. It keeps the response-level ratio-matching
+principle used by DPO and BPO, but moves the learning signal to semantic
+chunks without comparing winner and loser chunks across different prefix
+states.
+
+The method is built around three design choices:
+
+- deterministic semantic chunks, with exact policy/reference likelihood ratios
+  induced by the autoregressive factorization;
+- one-sided chunk targets, so each chunk is matched at its own prefix and no
+  state-dependent correction or value head is needed;
+- a calibrated response-level margin, distributed across chunks by an
+  admissible target shape and optimized with an SBA Bregman objective.
+
+The public training scripts in this repository use a uniform admissible target
+shape by default. This preserves the calibrated response-level target. The loss
+also supports shaped allocation through `loss.use_advantage_shape=true` when
+per-response score proxies are available in the dataset.
 
 ## Contents
 
-- [Overview](#overview)
-- [Repository layout](#repository-layout)
+- [Repository Layout](#repository-layout)
 - [Installation](#installation)
 - [Training](#training)
 - [Evaluation](#evaluation)
+- [Tests](#tests)
 - [Citation](#citation)
 
----
+## Repository Layout
 
-## Overview
-
-TBPO recasts token-level preference optimization as a **density-ratio matching** problem under a **Bregman divergence**. Token-DPO–style methods re-weight a fixed sequence-level loss; TBPO instead *directly fits the policy/reference log-ratio at the token level* using a family of pluggable divergences. This yields a single objective in which the choice of Bregman generator `h(·)` recovers and generalizes prior work.
-
-Two principal variants are studied in the paper:
-
-| Variant   | Idea                                              | Loss preset    |
-|-----------|---------------------------------------------------|----------------|
-| A-version | Token-level **A**dvantage-weighted ratio matching | `loss=A_tbpo`  |
-| Q-version | **Q**-style token-level objective                 | `loss=Q_tbpo`  |
-
----
-
-## Repository layout
-
-```
+```text
 .
-├── train.py                    # Hydra entry point
-├── trainers.py                 # BasicTrainer / FSDPTrainer + per-loss forward passes
-├── preference_datasets.py      # HF preference-data loading & tokenization
-├── merge.py                    # LoRA adapter → base-model merge utility
-├── baseline_head.py            # Optional learned baseline head
-├── utils.py                    # Distributed init, logging, run-dir helpers
-│
-├── loss/
-│   ├── loss.py                 # preference / TDPO / TIS-DPO / Bregman losses
-│   ├── loss_utils.py           # Per-method token-level log-prob computations
-│   └── h_function.py           # Bregman h-functions: SBA, BA, LSIF, KLIEP, LR_DPO
-│
-├── config/
-│   ├── config.yaml             # Top-level training config (Hydra)
-│   ├── model/                  # llama_8b.yaml, mistral_7b.yaml, blank.yaml
-│   └── loss/                   # A_tbpo.yaml, Q_tbpo.yaml
-│
-├── script/
-│   ├── train/{A_version,Q_version}/   # LoRA + full-FT launchers (Llama / Mistral)
-│   └── eval/general/                  # ARC, GSM8K, HellaSwag, MMLU, QA, Winogrande
-│
-├── winrate_eval/               # AlpacaEval-style win-rate harness
-├── diversity_metrics/          # Generation + distinct-1 / self-BLEU / entropy
-├── mtbench/FastChat/           # Vendored FastChat for MT-Bench judging
-└── env/                        # Conda environment specs
+|-- train.py                       # Hydra entry point
+|-- trainers.py                    # BasicTrainer and FSDPTrainer
+|-- arc_bpo_chunking.py            # deterministic semantic chunking
+|-- preference_datasets.py         # HF preference-data loading and tokenization
+|-- loss/
+|   |-- loss.py                    # ARC-BPO, BPO, DPO-style losses
+|   |-- loss_utils.py              # log-prob, KL, and chunk-ratio utilities
+|   `-- h_function.py              # Bregman generators
+|-- config/
+|   |-- config.yaml                # top-level Hydra config
+|   |-- model/                     # Llama, Mistral, Qwen model presets
+|   `-- loss/arc_bpo.yaml          # ARC-BPO loss preset
+|-- script/
+|   |-- README.md                  # server training guide
+|   |-- train/arc_bpo_*.sh         # ARC-BPO launch scripts
+|   `-- eval/general/              # lm-eval scripts
+|-- winrate_eval/                  # AlpacaEval-style win-rate evaluation
+|-- diversity_metrics/             # generation diversity scripts
+|-- mtbench/FastChat/              # vendored FastChat for MT-Bench
+|-- env/                           # conda environment specs
+`-- tests/                         # ARC-BPO unit tests
 ```
 
----
+Legacy comparison utilities are kept in the repository, but the ARC-BPO entry
+points are `config/loss/arc_bpo.yaml` and the three `script/train/arc_bpo_*.sh`
+launchers.
 
 ## Installation
 
-The project uses two isolated conda environments — one for training, one for general LM evaluation. The remaining benchmark suites (AlpacaEval, MT-Bench, diversity) bring their own envs and are documented inline.
-
-**Training**
+Training is intended for Linux GPU servers. The shell scripts use `bash`, CUDA,
+and Hugging Face model downloads.
 
 ```bash
-conda env create -f env/train_env.yml
-conda activate TokenBPO-train
+conda create -n arc-bpo python=3.10 -y
+conda activate arc-bpo
+
+# Pick the PyTorch CUDA wheel that matches your server. Example for CUDA 12.1:
+pip install torch --index-url https://download.pytorch.org/whl/cu121
+pip install -r requirements.txt
 ```
 
-PyTorch is installed from the official CUDA 12.4 wheel index. Edit `env/train_env.yml` for other CUDA versions.
+Login to Hugging Face before training gated or hosted models.
 
-**Evaluation (general LM benchmarks)**
+```bash
+huggingface-cli login
+```
+
+or set a token in the shell:
+
+```bash
+export HF_TOKEN="hf_xxx"
+```
+
+For the general LM evaluation scripts, the pinned evaluation environment is
+kept separately:
 
 ```bash
 conda env create -f env/eval_env.yml
 conda activate TokenBPO-eval
 ```
 
-Pinned to `lm-eval==0.4.9.2` with the `vllm`, `ifeval`, and `math` extras.
-
-> Tested on Linux + 4× NVIDIA A100/H100 with CUDA 12.4. Single-GPU runs work on consumer cards under LoRA but will require lowering `batch_size` and increasing `gradient_accumulation_steps`.
-
----
-
 ## Training
 
-### Configuration (Hydra)
+The main ARC-BPO launch scripts are:
 
-Configs are split into three composable layers; any field can be overridden on the command line.
-
-| File | Purpose | Key options |
-|---|---|---|
-| `config/config.yaml`     | Top-level run            | `batch_size`, `lr`, `optimizer`, `trainer`, `n_epochs`, `max_length`, `wandb.*`, `datasets` |
-| `config/model/*.yaml`    | Base model + PEFT        | `name_or_path`, `block_name`, `use_lora`, `lora_r`, `lora_alpha`, `lora_target_modules`     |
-| `config/loss/*.yaml`     | Loss & Bregman generator | `name`, `bregman_loss.{name,lam,s}`, `beta`, `label_smoothing`                              |
-
-Available presets:
-
-- **Models** — `llama_8b` ([RLHFlow/LLaMA3-SFT-v2](https://huggingface.co/RLHFlow/LLaMA3-SFT-v2)), `mistral_7b`, `blank`
-- **Losses** — `A_tbpo`, `Q_tbpo`
-- **Bregman generators** — `sba`, `ba`, `lsif`, `kliep`, `lr` (DPO-equivalent)
-
-Defaults that match the paper:
-
-- LoRA enabled (`use_lora=true`, r=32, α=64, dropout=0.05)
-- `FSDPTrainer` for multi-GPU runs
-- RMSprop optimizer, cosine schedule, 5 % warmup
-- `max_length=2048`, `batch_size=64`, `lr=5e-7`, `n_epochs=1`
-- `beta=0.1`, `label_smoothing=0`
-
-### Launch scripts
-
-Two regimes per model and per variant. Both share the *same* loss, dataset, optimizer, and schedule — the only difference is the parameterization (`use_lora`).
-
-**LoRA (matches the paper)** — low-rank adapters on a frozen base; lower memory, faster.
-
-```bash
-# A-version (advantage-weighted)
-bash script/train/A_version/llama_general.sh
-bash script/train/A_version/mistral_general.sh
-
-# Q-version
-bash script/train/Q_version/llama_general.sh
-bash script/train/Q_version/mistral_general.sh
+```text
+script/train/arc_bpo_llama.sh
+script/train/arc_bpo_mistral.sh
+script/train/arc_bpo_qwen.sh
 ```
 
-**Full fine-tune (maximum quality)** — updates all parameters; higher quality at substantially higher GPU cost.
+Run scripts from the repository root unless your scheduler already starts jobs
+there.
+
+### Quick Smoke Test
+
+Run a small LoRA job before launching a full run.
 
 ```bash
-bash script/train/A_version/llama_general_full.sh
-bash script/train/A_version/mistral_general_full.sh
-bash script/train/Q_version/llama_general_full.sh
-bash script/train/Q_version/mistral_general_full.sh
+GPU_IDS=0 \
+N_EXAMPLES=64 \
+BATCH_SIZE=4 \
+GRAD_ACCUM=4 \
+N_EVAL_EXAMPLES=0 \
+DO_FIRST_EVAL=false \
+USE_LORA=true \
+bash script/train/arc_bpo_llama.sh
 ```
 
-Set `WANDB_API_KEY` and `CUDA_VISIBLE_DEVICES` at the top of each script before launching.
+The same pattern works for Mistral and Qwen:
 
-### Direct CLI
+```bash
+bash script/train/arc_bpo_mistral.sh
+bash script/train/arc_bpo_qwen.sh
+```
 
-Any setting can be overridden directly:
+After a smoke test, check:
+
+```bash
+ls output/logs
+find output -name LATEST
+```
+
+### Full ARC-BPO Runs
+
+Llama-3-8B uses `princeton-nlp/llama3-ultrafeedback-armorm`, split into
+`train` and `test`, initialized from `RLHFlow/LLaMA3-SFT-v2`.
+
+```bash
+GPU_IDS=0,1,2,3 \
+BATCH_SIZE=64 \
+GRAD_ACCUM=4 \
+N_EVAL_EXAMPLES=0 \
+DO_FIRST_EVAL=false \
+USE_LORA=true \
+HF_REPO_ID=ducthang1703/llama3-arc-bpo-uniform-lora-full-bs64 \
+HF_PRIVATE=false \
+bash script/train/arc_bpo_llama.sh
+```
+
+Mistral uses `HuggingFaceH4/ultrafeedback_binarized`, split into
+`train_prefs` and `test_prefs`, initialized from
+`HuggingFaceH4/mistral-7b-sft-alpha`.
+
+```bash
+GPU_IDS=0,1,2,3 \
+BATCH_SIZE=64 \
+GRAD_ACCUM=4 \
+N_EVAL_EXAMPLES=0 \
+DO_FIRST_EVAL=false \
+USE_LORA=true \
+HF_REPO_ID=ducthang1703/mistral-arc-bpo-uniform-lora-full \
+HF_PRIVATE=false \
+bash script/train/arc_bpo_mistral.sh
+```
+
+Qwen uses `HuggingFaceH4/ultrafeedback_binarized`, split into `train_prefs`
+and `test_prefs`, initialized from `Qwen/Qwen2.5-7B-Instruct`.
+
+```bash
+GPU_IDS=0,1,2,3 \
+BATCH_SIZE=64 \
+GRAD_ACCUM=4 \
+N_EVAL_EXAMPLES=0 \
+DO_FIRST_EVAL=false \
+USE_LORA=true \
+HF_REPO_ID=ducthang1703/qwen25-7b-instruct-arc-bpo-uniform-lora-full \
+HF_PRIVATE=false \
+bash script/train/arc_bpo_qwen.sh
+```
+
+### Important Overrides
+
+The scripts expose the main ARC-BPO hyperparameters as environment variables.
+
+```text
+BETA=0.1
+DELTA_STAR=2.5        # Llama and Mistral default
+DELTA_STAR=2.0        # Qwen default
+ARC_T=2.0
+KAPPA=2.0
+SBA_LAMBDA=1.0
+SBA_SCALE=4.0
+MIN_TOKENS_PER_CHUNK=4
+MAX_TOKENS_PER_CHUNK=64
+USE_ADVANTAGE_SHAPE=false
+FALLBACK_TO_UNIFORM_SHAPE=true
+```
+
+`BATCH_SIZE` must be divisible by:
+
+```text
+GRAD_ACCUM * number_of_visible_gpus
+```
+
+For example, with four GPUs and `GRAD_ACCUM=4`, valid batch sizes include
+`16`, `32`, `64`, and `128`.
+
+If the job runs out of memory, lower the per-GPU microbatch first:
+
+```bash
+BATCH_SIZE=16 GRAD_ACCUM=8 MAX_LENGTH=2048 bash script/train/arc_bpo_llama.sh
+```
+
+For a single GPU, start smaller:
+
+```bash
+BATCH_SIZE=4 GRAD_ACCUM=4 MAX_LENGTH=2048 bash script/train/arc_bpo_llama.sh
+```
+
+### Direct Hydra CLI
+
+All script settings can also be passed directly to `train.py`.
 
 ```bash
 python train.py \
-    model=llama_8b \
-    loss=A_tbpo \
-    loss.bregman_loss.name=sba \
-    loss.bregman_loss.s=4.0 \
-    datasets=princeton-nlp/llama3-ultrafeedback-armorm \
-    batch_size=32 \
-    lr=5e-7
+  model=llama_8b \
+  loss=arc_bpo \
+  datasets=princeton-nlp/llama3-ultrafeedback-armorm \
+  dataset_train_split=train \
+  dataset_test_split=test \
+  batch_size=32 \
+  gradient_accumulation_steps=4 \
+  lr=5e-7 \
+  loss.delta_star=2.5 \
+  loss.beta=0.1 \
+  loss.min_tokens_per_chunk=4 \
+  loss.max_tokens_per_chunk=64
 ```
 
-### Merging LoRA adapters
+### Outputs and Uploads
 
-Required **only for LoRA runs** — full fine-tunes already save a complete model under `LATEST/` and can skip this step. Edit the paths in `merge.py` and run:
+Training logs are written to:
 
-```bash
-python merge.py
+```text
+output/logs/*.log
 ```
 
-The script supports both local output and optional push-to-Hub.
+Final checkpoints are saved under:
 
----
+```text
+output/<run_name>/LATEST
+```
+
+For LoRA runs, the adapter is saved under:
+
+```text
+output/<run_name>/LATEST/adapter
+```
+
+If `HF_REPO_ID` is set, the script uploads the selected checkpoint folder to:
+
+```text
+https://huggingface.co/<HF_REPO_ID>
+```
+
+With `USE_LORA=true` and `HF_UPLOAD_ADAPTER_ONLY=true`, only the adapter folder
+is uploaded. With `USE_LORA=false`, or `HF_UPLOAD_ADAPTER_ONLY=false`, the whole
+`LATEST` folder is uploaded.
 
 ## Evaluation
 
-Five evaluation tracks are provided; they are independent and can be run in any order. Track 2 ("Pre-processed prompts") only downloads shared data used by tracks 3–5.
+The repository keeps evaluation tools separate from training.
 
-### 1 · General LM benchmarks
+### General LM Benchmarks
 
-Six benchmarks (ARC, GSM8K, HellaSwag, MMLU, QA, Winogrande) via `lm-eval` with a vLLM backend.
+The `script/eval/general/` scripts evaluate ARC, GSM8K, HellaSwag, MMLU, QA,
+and Winogrande through `lm-eval` with a vLLM backend.
 
-1. Edit `MODEL_NAME`, `TP_SIZE`, `BATCH_SIZE`, and `MAX_LEN` at the top of `script/eval/general/runall.sh`.
-2. Run:
+Edit `MODEL_NAME`, `TP_SIZE`, `BATCH_SIZE`, and `MAX_LEN` in:
 
-   ```bash
-   conda activate TokenBPO-eval
-   bash script/eval/general/runall.sh
-   ```
-
-`runall.sh` cleans up vLLM processes between tasks to release GPU memory.
-
-### 2 · Pre-processed prompts
-
-Prompts and supporting data for tracks 3–5 are released on the Hub:
-
-```bash
-hf download tonyshelby/processed_data --repo-type dataset --local-dir ./processed_data
+```text
+script/eval/general/runall.sh
 ```
 
-### 3 · Win rate (AlpacaEval)
+then run:
+
+```bash
+conda activate TokenBPO-eval
+bash script/eval/general/runall.sh
+```
+
+### Win Rate
+
+The win-rate harness is under `winrate_eval/`.
 
 ```bash
 conda create -n alpaca-eval python=3.11.11 -y
@@ -211,9 +317,12 @@ pip install 'alpaca-eval[all]'
 bash winrate_eval/eval.sh
 ```
 
-Judge model, model endpoints, and prompt templates live under `winrate_eval/{annotators_configs,model_configs,client_configs}/`. See `winrate_eval/notes.md` for the exact wiring used in the paper.
+Judge prompts, model endpoints, and client settings live under
+`winrate_eval/{annotators_configs,model_configs,client_configs}/`.
 
-### 4 · Diversity (distinct-1, self-BLEU, predictive entropy)
+### Diversity
+
+Generation diversity scripts are under `diversity_metrics/`.
 
 ```bash
 conda create -n diversity-metrics python=3.11 -y
@@ -221,24 +330,32 @@ conda activate diversity-metrics
 pip install vllm transformers sacrebleu tqdm
 ```
 
-Two-stage pipeline (full reference: `diversity_metrics/notes.md`):
+Generate completions:
 
 ```bash
-# (a) sample k completions per prompt
 python diversity_metrics/generation_vllm.py \
-    --model <merged-model-path> \
-    --prompts processed_data/diversity_prompts.jsonl \
-    --out diversity_metrics/<run>/diversity_generations.jsonl \
-    --k 5 --tensor_parallel_size 2 --batch_size 64 \
-    --max_new_tokens 128 --temperature 1.0 --top_p 0.95
-
-# (b) compute distinct-1 / self-BLEU / predictive entropy
-python diversity_metrics/compute_diversity.py \
-    --infile diversity_metrics/<run>/diversity_generations.jsonl \
-    --out    diversity_metrics/<run>/diversity_metrics.json
+  --model <merged-model-path> \
+  --prompts processed_data/diversity_prompts.jsonl \
+  --out diversity_metrics/<run>/diversity_generations.jsonl \
+  --k 5 \
+  --tensor_parallel_size 2 \
+  --batch_size 64 \
+  --max_new_tokens 128 \
+  --temperature 1.0 \
+  --top_p 0.95
 ```
 
-### 5 · MT-Bench
+Compute metrics:
+
+```bash
+python diversity_metrics/compute_diversity.py \
+  --infile diversity_metrics/<run>/diversity_generations.jsonl \
+  --out diversity_metrics/<run>/diversity_metrics.json
+```
+
+### MT-Bench
+
+MT-Bench support is provided through the vendored FastChat tree.
 
 ```bash
 conda create -n mtbench python=3.11 -y
@@ -248,29 +365,41 @@ pip install -e ".[model_worker,llm_judge]"
 pip install vllm
 ```
 
-Serve each candidate with vLLM, generate answers with `fastchat/llm_judge/gen_api_answer.py`, then score with `gen_judgment.py` (mode `pairwise-all`) and summarize with `show_result.py`. Full command sequence: `mtbench/FastChat/notes.md`.
+Serve the candidate model with vLLM, generate answers with
+`fastchat/llm_judge/gen_api_answer.py`, judge them with
+`fastchat/llm_judge/gen_judgment.py`, and summarize results with
+`fastchat/llm_judge/show_result.py`. The command sequence used in this repo is
+documented in `mtbench/FastChat/notes.md`.
 
----
+## Tests
+
+ARC-BPO unit tests can be run without launching a training job:
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+These tests cover chunk-ratio telescoping, calibrated one-sided targets,
+detached target construction, gradient direction, variable chunk counts, and
+the guard that ARC-BPO does not fall back to token-level matching or a value
+head.
 
 ## Citation
 
-If you use this repository or find the paper useful, please cite:
+If you use this repository, please cite:
 
 ```bibtex
-@article{nguyen2026tokenration,
-  title={TokenRatio: Principled Token-Level Preference Optimization via Ratio Matching},
-  author={Truong Nguyen and Tien-Phat Nguyen and Linh Ngo Van and Duy Minh Ho Nguyen and Khoa D. Doan and Trung Le},
-  journal={International Conference on Machine Learning},
-  year={2026},
-  url={https://arxiv.org/abs/2605.12288},
+@article{tran2026arcbpo,
+  title={Advantage-Referenced Chunk-Level Bregman Preference Optimization},
+  author={Thang Duc Tran and Tien-Phat Nguyen and Truong Nguyen and Duc Anh Nguyen and Linh Ngo Van and Thien Huu Nguyen and Trung Le},
+  year={2026}
 }
 ```
 
----
-
 ## Acknowledgements
 
-The MT-Bench harness under `mtbench/FastChat/` is a vendored copy of [LMSYS FastChat](https://github.com/lm-sys/FastChat) and retains its original Apache 2.0 license.
+The MT-Bench harness under `mtbench/FastChat/` is a vendored copy of LMSYS
+FastChat and keeps its original Apache 2.0 license.
 
 ## License
 
