@@ -383,7 +383,7 @@ These tests cover chunk-ratio telescoping, calibrated one-sided targets,
 detached target construction, gradient direction, variable chunk counts, and
 the guard that ARC-BPO does not fall back to token-level matching or a value
 head.
-
+<!-- 
 ## Citation
 
 If you use this repository, please cite:
@@ -394,7 +394,7 @@ If you use this repository, please cite:
   author={Thang Duc Tran and Tien-Phat Nguyen and Truong Nguyen and Duc Anh Nguyen and Linh Ngo Van and Thien Huu Nguyen and Trung Le},
   year={2026}
 }
-```
+``` -->
 
 ## Acknowledgements
 
