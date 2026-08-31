@@ -4,7 +4,7 @@ import unittest
 
 import torch
 
-from loss.loss import arc_bpo_pair_loss
+from loss.loss import arc_bpo_pair_loss, bregman_sba, sba_h, sba_h_prime
 from loss.loss_utils import (
     compute_exact_chunk_log_ratios,
     construct_arc_bpo_one_sided_targets,
@@ -54,6 +54,18 @@ class ArcBPOTest(unittest.TestCase):
         self.assertFalse(pi_w.requires_grad)
         self.assertFalse(rho_l.requires_grad)
         self.assertTrue(torch.allclose(tau_w.sum() - tau_l.sum(), torch.tensor(1.5)))
+
+    def test_strict_advantage_mode_rejects_missing_proxy(self):
+        with self.assertRaisesRegex(ValueError, "Missing ARC-BPO advantage proxy"):
+            construct_arc_bpo_one_sided_targets(
+                2,
+                2,
+                2.0,
+                chosen_advantages=None,
+                rejected_advantages=None,
+                use_advantage_shape=True,
+                fallback_to_uniform=False,
+            )
 
     def test_gradient_sign_pulls_chunk_ratio_toward_target(self):
         chosen_a = torch.tensor([0.0], requires_grad=True)
@@ -105,6 +117,49 @@ class ArcBPOTest(unittest.TestCase):
         self.assertTrue(torch.allclose(rho_l, torch.full((2,), 0.5)))
         self.assertTrue(torch.allclose(tau_w, torch.full((4,), 0.25)))
         self.assertTrue(torch.allclose(tau_l, torch.full((2,), -0.5)))
+
+    def test_no_winsorization_uses_raw_advantage_shape(self):
+        advantages = torch.tensor([0.0, 0.0, 10.0])
+        _, _, raw_shape, _ = construct_arc_bpo_one_sided_targets(
+            3,
+            1,
+            2.0,
+            chosen_advantages=advantages,
+            rejected_advantages=torch.tensor([0.0]),
+            use_advantage_shape=True,
+            winsorize=False,
+            temperature=2.0,
+        )
+        _, _, clipped_shape, _ = construct_arc_bpo_one_sided_targets(
+            3,
+            1,
+            2.0,
+            chosen_advantages=advantages,
+            rejected_advantages=torch.tensor([0.0]),
+            use_advantage_shape=True,
+            winsorize=True,
+            temperature=2.0,
+        )
+
+        self.assertTrue(torch.allclose(raw_shape, torch.softmax(advantages / 2.0, dim=0)))
+        self.assertTrue(torch.allclose(clipped_shape, torch.full((3,), 1.0 / 3.0)))
+
+    def test_sba_lambda_zero_is_exact_limit(self):
+        ratios = torch.tensor([0.4, 1.0, 2.3], dtype=torch.float64)
+        scale = 4.0
+
+        self.assertTrue(torch.allclose(sba_h(ratios, lam=0.0, s=scale), ratios * ratios.log() / scale))
+        self.assertTrue(
+            torch.allclose(
+                sba_h_prime(ratios, lam=0.0, s=scale),
+                (ratios.log() + 1.0) / scale,
+            )
+        )
+        target = torch.tensor([0.7, 1.7], dtype=torch.float64)
+        model = torch.tensor([1.2, 0.8], dtype=torch.float64)
+        exact = bregman_sba(target, model, lam=0.0, s=scale)
+        near = bregman_sba(target, model, lam=1e-6, s=scale)
+        self.assertTrue(torch.allclose(exact, near, atol=2e-7, rtol=2e-6))
 
     def test_chunk_spans_retarget_to_shifted_response_logprob_length(self):
         spans = retarget_chunk_spans_to_length([(0, 7)], n_tokens=6)

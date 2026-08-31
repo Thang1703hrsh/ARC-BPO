@@ -1,0 +1,4 @@
+# Install in the evaluation environment after the repository's training requirements.
+lm-eval[vllm,sentencepiece]==0.4.9.2
+vllm==0.8.5
+matplotlib>=3.7

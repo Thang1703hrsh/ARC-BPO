@@ -85,8 +85,13 @@ def worker_main(
     rank0_print("building policy")
     model_kwargs = {"device_map": "balanced"} if config.trainer == "BasicTrainer" else {}
     policy_dtype = getattr(torch, config.model.policy_dtype)
+    model_revision = getattr(config.model, "revision", None)
     policy = transformers.AutoModelForCausalLM.from_pretrained(
-        config.model.name_or_path, low_cpu_mem_usage=True, torch_dtype=policy_dtype, **model_kwargs
+        config.model.name_or_path,
+        revision=model_revision,
+        low_cpu_mem_usage=True,
+        torch_dtype=policy_dtype,
+        **model_kwargs,
     )
     if config.model.use_baseline_head:
         hidden_size = getattr(policy.config, "hidden_size", None) or getattr(
@@ -137,6 +142,7 @@ def worker_main(
         reference_model_dtype = getattr(torch, config.model.reference_dtype)
         reference_model = transformers.AutoModelForCausalLM.from_pretrained(
             config.model.name_or_path,
+            revision=model_revision,
             low_cpu_mem_usage=True,
             torch_dtype=reference_model_dtype,
             **model_kwargs,

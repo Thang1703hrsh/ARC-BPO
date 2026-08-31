@@ -2,10 +2,35 @@ __pycache__/
 *.pyc
 .env
 outputs/
+output/
+results/
+runs/
 wandb/
 model_hub/
 *.out
+*.log
 logs/
+
+# Local model weights and training checkpoints
+checkpoints/
+checkpoint-*/
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+*.gguf
+pytorch_model*.bin
+adapter_model*.bin
+
+# Local experiment specifications/notes. Markdown files already tracked by
+# Git (for example README.md) remain tracked; this hides new local .md files.
+*.md
+
+# Synthetic/simulated artifacts must not be published as real results.
+*simulated*
+*simulation*
+synthetic_results/
+simulated_results/
 
 # # Local Modal launch/eval scripts
 # modal_*.py

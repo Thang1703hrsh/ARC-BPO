@@ -1,3 +1,5 @@
+import json
+import os
 import random
 from collections import defaultdict
 from typing import Callable, Dict, Iterator, List, Optional, Union
@@ -9,6 +11,7 @@ import tqdm
 from torch.nn.utils.rnn import pad_sequence
 
 from arc_bpo_chunking import chunk_preference_pair, retarget_chunk_spans_to_length
+from arc_bpo_scores import extract_preference_scores
 from utils import TemporarilySeededRandom
 
 
@@ -93,12 +96,18 @@ def get_dataset_from_hf(
     split: str,
     silent: bool = False,
     cache_dir: Optional[str] = None,
+    revision: Optional[str] = None,
 ):
     data: Dict[str, Dict[str, List]] = defaultdict(lambda: defaultdict(list))
     data_iter: Iterator[Dict]
 
     print(f"Loading {hf_dataset_repo_name} dataset ({split} split) from HF...")
-    data_iter = datasets.load_dataset(hf_dataset_repo_name, split=split, cache_dir=cache_dir)
+    data_iter = datasets.load_dataset(
+        hf_dataset_repo_name,
+        split=split,
+        cache_dir=cache_dir,
+        revision=revision,
+    )
 
     for example in tqdm.tqdm(data_iter, desc=f"Processing {hf_dataset_repo_name}", disable=silent):
         assert len(example["chosen"]) == 2, "(Chosen) Only support 2 turns for now"
@@ -123,11 +132,16 @@ def get_dataset_from_hf(
         data[prompt_str]["responses"].extend(responses)
         data[prompt_str]["sft_target"] = [chosen]
 
-        # Optional response-level reward scores (e.g. ArmoRM in
-        # princeton-nlp/llama3-ultrafeedback-armorm). Kept aligned with
-        # `responses` so each response index has a matching score (or None).
-        chosen_score = example.get("score_chosen")
-        rejected_score = example.get("score_rejected")
+        # Optional response-level reward scores. Princeton's ArmoRM dataset
+        # stores them in all_generated_responses/all_rm_scores rather than
+        # score_chosen/score_rejected, so recover them by response-text match.
+        # Kept aligned with `responses`; None deliberately triggers the loss's
+        # configured missing-proxy policy.
+        chosen_score, rejected_score = extract_preference_scores(
+            example,
+            chosen["content"],
+            rejected["content"],
+        )
         data[prompt_str]["response_scores"].extend([chosen_score, rejected_score])
 
     return data
@@ -359,6 +373,8 @@ def get_batch_iterator(
     skip_examples: int = 0,
     label_noise_rate: float = 0.0,
     label_noise_seed: Optional[int] = None,
+    label_noise_indices_path: Optional[str] = None,
+    dataset_revision: Optional[str] = None,
 ) -> Iterator[Dict]:
     assert n_epochs is not None or n_examples is not None, (
         "Must specify either n_epochs or n_examples"
@@ -372,29 +388,26 @@ def get_batch_iterator(
     with TemporarilySeededRandom(seed):
         permutation_seeds = iter(np.random.randint(0, 2**32, size=1000000).tolist())
         flat_data = []
-        noise_rng = random.Random(seed if label_noise_seed is None else label_noise_seed)
+        noise_seed = seed if label_noise_seed is None else int(label_noise_seed)
         noisy_pair_count = 0
         total_pair_count = 0
+
+        noise_manifest = None
+        manifest_indices = None
+        if label_noise_indices_path and os.path.isfile(label_noise_indices_path):
+            with open(label_noise_indices_path, "r", encoding="utf-8") as handle:
+                noise_manifest = json.load(handle)
+            manifest_indices = {int(index) for index in noise_manifest["swapped_pair_indices"]}
 
         for prompt, data in get_dataset_from_hf(
             hf_dataset_repo_names,
             split,
             silent=silent,
             cache_dir=cache_dir,
+            revision=dataset_revision,
         ).items():
-            pairs = data["pairs"]
-            if label_noise_rate > 0 and not sft_mode:
-                noisy_pairs = []
-                for pair in pairs:
-                    total_pair_count += 1
-                    if noise_rng.random() < label_noise_rate:
-                        noisy_pairs.append((pair[1], pair[0]))
-                        noisy_pair_count += 1
-                    else:
-                        noisy_pairs.append(pair)
-                pairs = noisy_pairs
-            else:
-                total_pair_count += len(pairs)
+            pairs = list(data["pairs"])
+            total_pair_count += len(pairs)
             flat_data.append(
                 (
                     prompt,
@@ -405,13 +418,113 @@ def get_batch_iterator(
                     data.get("response_scores", []),
                 )
             )
+        if label_noise_rate > 0 and not sft_mode:
+            target_noisy_count = round(float(label_noise_rate) * total_pair_count)
+            if noise_manifest is None:
+                manifest_indices = set(
+                    random.Random(noise_seed).sample(
+                        range(total_pair_count),
+                        target_noisy_count,
+                    )
+                )
+            else:
+                if noise_manifest.get("version") != 2:
+                    raise ValueError(
+                        "Label-noise manifest uses an obsolete sampling protocol; "
+                        "expected version 2 exact sampling without replacement."
+                    )
+                if noise_manifest.get("selection") != "exact_without_replacement":
+                    raise ValueError(
+                        "Label-noise manifest selection mismatch: "
+                        f"{noise_manifest.get('selection')!r}."
+                    )
+
+        if noise_manifest is not None:
+            expected_dataset = str(hf_dataset_repo_names)
+            checks = {
+                "dataset": expected_dataset,
+                "split": str(split),
+                "seed": noise_seed,
+                "total_pairs": total_pair_count,
+            }
+            for key, expected in checks.items():
+                if noise_manifest.get(key) != expected:
+                    raise ValueError(
+                        f"Label-noise manifest mismatch for {key}: "
+                        f"stored={noise_manifest.get(key)!r}, expected={expected!r}."
+                    )
+            stored_rate = float(noise_manifest.get("rate", -1.0))
+            if abs(stored_rate - float(label_noise_rate)) > 1e-12:
+                raise ValueError(
+                    "Label-noise manifest rate mismatch: "
+                    f"stored={stored_rate}, expected={label_noise_rate}."
+                )
+            invalid_indices = [index for index in manifest_indices if not 0 <= index < total_pair_count]
+            if invalid_indices:
+                raise ValueError(
+                    f"Label-noise manifest contains out-of-range indices: {invalid_indices[:10]}"
+                )
+            expected_count = round(float(label_noise_rate) * total_pair_count)
+            if len(manifest_indices) != expected_count:
+                raise ValueError(
+                    "Label-noise manifest does not contain exactly the requested number "
+                    f"of swaps: stored={len(manifest_indices)}, expected={expected_count}."
+                )
+        elif label_noise_indices_path and label_noise_rate > 0 and not sft_mode:
+            manifest = {
+                "version": 2,
+                "selection": "exact_without_replacement",
+                "dataset": str(hf_dataset_repo_names),
+                "split": str(split),
+                "seed": noise_seed,
+                "rate": float(label_noise_rate),
+                "total_pairs": total_pair_count,
+                "num_swapped": len(manifest_indices),
+                "swapped_pair_indices": sorted(manifest_indices),
+            }
+            is_rank_zero = (
+                not torch.distributed.is_available()
+                or not torch.distributed.is_initialized()
+                or torch.distributed.get_rank() == 0
+            )
+            if is_rank_zero:
+                parent = os.path.dirname(os.path.abspath(label_noise_indices_path))
+                os.makedirs(parent, exist_ok=True)
+                temporary_path = f"{label_noise_indices_path}.tmp.{os.getpid()}"
+                with open(temporary_path, "w", encoding="utf-8") as handle:
+                    json.dump(manifest, handle, indent=2, sort_keys=True)
+                    handle.write("\n")
+                os.replace(temporary_path, label_noise_indices_path)
+        if label_noise_rate > 0 and not sft_mode:
+            noisy_flat_data = []
+            pair_index = 0
+            for prompt, prompt_dict, responses, pairs, sft_target, response_scores in flat_data:
+                noisy_pairs = []
+                for pair in pairs:
+                    if pair_index in manifest_indices:
+                        noisy_pairs.append((pair[1], pair[0]))
+                        noisy_pair_count += 1
+                    else:
+                        noisy_pairs.append(pair)
+                    pair_index += 1
+                noisy_flat_data.append(
+                    (
+                        prompt,
+                        prompt_dict,
+                        responses,
+                        noisy_pairs,
+                        sft_target,
+                        response_scores,
+                    )
+                )
+            flat_data = noisy_flat_data
         if label_noise_rate > 0 and not silent and not sft_mode:
             print(
                 "Applied preference label noise: "
                 f"swapped {noisy_pair_count}/{total_pair_count} pairs "
                 f"({noisy_pair_count / max(total_pair_count, 1):.2%}), "
                 f"target rate={label_noise_rate:.2%}, "
-                f"seed={seed if label_noise_seed is None else label_noise_seed}"
+                f"seed={noise_seed}, manifest={label_noise_indices_path or 'disabled'}"
             )
 
     collate_fn = get_collate_fn(tokenizer)

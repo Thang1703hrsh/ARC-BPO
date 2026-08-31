@@ -1,0 +1,410 @@
+#!/usr/bin/env python3
+"""Generate, audit, and optionally execute ARC-BPO sensitivity runs."""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+from typing import Any, Dict, List
+
+from sensitivity.common import (
+    audit_run_config,
+    build_llama3_10k_bs64_base,
+    build_run_specs,
+    canonical_hash,
+    config_to_plain,
+    load_resolved_config,
+    normalize_base_config,
+    parse_seeds,
+    parse_sweeps,
+    patch_run_config,
+    scientific_payload,
+    validate_sensitivity_base,
+    write_csv,
+    write_json,
+)
+
+
+MANIFEST_FIELDS = (
+    "run_name",
+    "sweep",
+    "parameter",
+    "value",
+    "numeric_value",
+    "seed",
+    "noise_rate",
+    "config_path",
+    "run_dir",
+    "checkpoint",
+    "config_hash",
+    "scientific_hash",
+    "base_config_hash",
+    "status",
+    "hf_repo_id",
+    "hf_path",
+    "hf_url",
+    "hf_status",
+)
+
+
+def _environment_bool(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off"}:
+        return False
+    raise ValueError(f"{name} must be true or false, got {value!r}.")
+
+
+def hf_checkpoint_path(run_name: str) -> str:
+    """Return a stable, human-readable path for one run inside an HF repo."""
+    safe_name = re.sub(r"[^A-Za-z0-9._-]+", "-", run_name).strip("-.")
+    if not safe_name:
+        raise ValueError("run_name must contain at least one safe character.")
+    return f"checkpoints/{safe_name}"
+
+
+def checkpoint_complete(checkpoint: Path, use_lora: bool) -> bool:
+    checkpoint = Path(checkpoint)
+    if not checkpoint.is_dir():
+        return False
+    if use_lora:
+        payload = checkpoint / "adapter"
+        config_path = payload / "adapter_config.json"
+        weights = list(payload.glob("adapter_model*.safetensors")) + list(
+            payload.glob("adapter_model*.bin")
+        )
+    else:
+        payload = checkpoint
+        config_path = payload / "config.json"
+        weights = list(payload.glob("model*.safetensors")) + list(
+            payload.glob("pytorch_model*.bin")
+        )
+    return config_path.is_file() and bool(weights) and all(
+        path.stat().st_size > 1024 for path in weights
+    )
+
+
+def upload_checkpoint_to_hf(
+    *,
+    api,
+    repo_id: str,
+    row: Dict[str, Any],
+    checkpoint: Path,
+    adapter_only: bool,
+) -> tuple[str, str]:
+    """Upload one checkpoint plus its audited configuration to Hugging Face."""
+    checkpoint = Path(checkpoint)
+    config_path = Path(str(row["config_path"]))
+    config_diff_path = config_path.parent / "config_diff.json"
+    destination = hf_checkpoint_path(str(row["run_name"]))
+
+    if not checkpoint.is_dir():
+        raise FileNotFoundError(f"Checkpoint directory does not exist: {checkpoint}")
+    if adapter_only:
+        adapter = checkpoint / "adapter"
+        weights = list(adapter.glob("adapter_model*.safetensors")) + list(
+            adapter.glob("adapter_model*.bin")
+        )
+        if (
+            not (adapter / "adapter_config.json").is_file()
+            or not weights
+            or any(path.stat().st_size <= 1024 for path in weights)
+        ):
+            raise RuntimeError(f"Complete LoRA adapter not found at {adapter}")
+
+    with tempfile.TemporaryDirectory(prefix="arc-bpo-hf-upload-") as temporary:
+        staging = Path(temporary)
+        if adapter_only:
+            shutil.copytree(checkpoint / "adapter", staging / "adapter")
+        else:
+            shutil.copytree(checkpoint, staging / "checkpoint")
+        shutil.copy2(config_path, staging / "resolved_config.yaml")
+        if config_diff_path.is_file():
+            shutil.copy2(config_diff_path, staging / "config_diff.json")
+        metadata = {
+            "run_name": row["run_name"],
+            "sweep": row["sweep"],
+            "parameter": row["parameter"],
+            "value": row["value"],
+            "seed": row["seed"],
+            "noise_rate": row["noise_rate"],
+            "checkpoint_layout": "adapter" if adapter_only else "checkpoint",
+            "scientific_hash": row["scientific_hash"],
+        }
+        (staging / "checkpoint_metadata.json").write_text(
+            json.dumps(metadata, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        api.upload_folder(
+            repo_id=repo_id,
+            repo_type="model",
+            folder_path=str(staging),
+            path_in_repo=destination,
+            commit_message=f"Upload {row['run_name']}",
+        )
+
+    url = f"https://huggingface.co/{repo_id}/tree/main/{destination}"
+    return destination, url
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Create one-factor-at-a-time ARC-BPO sensitivity configs from an exact "
+            "resolved main-run config. The default is audit-only; pass --execute to train."
+        )
+    )
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument(
+        "--base_config",
+        help="Resolved config.yaml saved by the advantage-enabled ARC-BPO main run.",
+    )
+    source.add_argument(
+        "--preset",
+        choices=("llama3-10k-bs64",),
+        help="Build the exact advantage-enabled Llama-3/10k/global-bs64 baseline.",
+    )
+    parser.add_argument("--output_root", default="outputs/sensitivity")
+    parser.add_argument("--sweeps", default="T,kappa,delta0,lambda")
+    parser.add_argument("--seeds", default="42", help="Comma-separated matched seeds.")
+    parser.add_argument("--noise_rate", type=float, default=0.20)
+    parser.add_argument("--noise_seed", type=int, default=2026)
+    parser.add_argument(
+        "--max_runs",
+        type=int,
+        default=0,
+        help="Limit generated runs for a launcher smoke test; 0 generates the full grid.",
+    )
+    parser.add_argument(
+        "--exclude_default_points",
+        action="store_true",
+        help=(
+            "Generate only the 14 missing runs from the current spec. The clean and "
+            "20%%-noise default rows must then be supplied from the fixed published anchors."
+        ),
+    )
+    parser.add_argument("--execute", action="store_true", help="Run training sequentially.")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Retrain even when the run's LATEST checkpoint already exists.",
+    )
+    parser.add_argument(
+        "--expected_gpus",
+        type=int,
+        default=0,
+        help="When executing, require exactly this many visible CUDA GPUs; 0 disables the check.",
+    )
+    parser.add_argument(
+        "--hf_repo_id",
+        default=os.environ.get("HF_REPO_ID", ""),
+        help="Optional model repo receiving every checkpoint (or set HF_REPO_ID).",
+    )
+    parser.add_argument(
+        "--hf_private",
+        action=argparse.BooleanOptionalAction,
+        default=_environment_bool("HF_PRIVATE", True),
+        help="Create/use a private HF repo (or set HF_PRIVATE).",
+    )
+    parser.add_argument(
+        "--hf_upload_adapter_only",
+        action=argparse.BooleanOptionalAction,
+        default=_environment_bool("HF_UPLOAD_ADAPTER_ONLY", True),
+        help="Upload only LoRA weights plus the audited config.",
+    )
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+    if not 0.0 < args.noise_rate < 1.0:
+        raise ValueError("noise_rate must be strictly between zero and one.")
+    if args.max_runs < 0:
+        raise ValueError("max_runs cannot be negative.")
+
+    output_root = Path(args.output_root).resolve()
+    output_root.mkdir(parents=True, exist_ok=True)
+    if args.preset == "llama3-10k-bs64":
+        base = build_llama3_10k_bs64_base(
+            Path(__file__).resolve().parent,
+            output_root,
+            seed=parse_seeds(args.seeds)[0],
+        )
+        base_source = "preset:llama3-10k-bs64"
+    else:
+        base = load_resolved_config(args.base_config)
+        base_source = str(Path(args.base_config).resolve())
+    base = normalize_base_config(base)
+    validate_sensitivity_base(base)
+    base_plain = config_to_plain(base)
+    base_config_hash = canonical_hash(scientific_payload(base))
+
+    write_json(output_root / "default_config.json", base_plain)
+    from omegaconf import OmegaConf
+
+    OmegaConf.save(base, output_root / "default_config.yaml")
+
+    sweeps = parse_sweeps(args.sweeps)
+    seeds = parse_seeds(args.seeds)
+    specs = build_run_specs(
+        base,
+        sweeps,
+        seeds,
+        args.noise_rate,
+        include_default_points=not args.exclude_default_points,
+    )
+    if args.max_runs:
+        specs = specs[: args.max_runs]
+
+    if args.execute and args.expected_gpus:
+        import torch
+
+        visible_gpus = torch.cuda.device_count()
+        if visible_gpus != args.expected_gpus:
+            raise RuntimeError(
+                f"Expected {args.expected_gpus} visible CUDA GPUs, found {visible_gpus}."
+            )
+
+    hf_api = None
+    if args.execute and args.hf_repo_id:
+        if args.hf_upload_adapter_only and not bool(base.model.use_lora):
+            raise ValueError("Adapter-only HF upload requires model.use_lora=true.")
+        from huggingface_hub import HfApi
+
+        hf_api = HfApi(token=os.environ.get("HF_TOKEN"))
+        hf_api.create_repo(
+            repo_id=args.hf_repo_id,
+            repo_type="model",
+            private=args.hf_private,
+            exist_ok=True,
+        )
+
+    noise_manifest = output_root / f"noise{int(round(100 * args.noise_rate))}_indices.json"
+    manifest_rows: List[Dict[str, Any]] = []
+    audits: List[Dict[str, Any]] = []
+    manifest_path = output_root / "run_manifest.csv"
+
+    for index, spec in enumerate(specs, start=1):
+        run_config = patch_run_config(
+            base,
+            spec,
+            output_root=output_root,
+            noise_seed=args.noise_seed,
+            noise_manifest=noise_manifest,
+        )
+        audit = audit_run_config(base, run_config, spec)
+        run_dir = Path(str(run_config.local_run_dir))
+        run_dir.mkdir(parents=True, exist_ok=True)
+        config_path = run_dir / "resolved_config.yaml"
+        OmegaConf.save(run_config, config_path)
+        write_json(run_dir / "config_diff.json", audit)
+        audits.append(audit)
+
+        checkpoint = run_dir / "LATEST"
+        status = "planned"
+        row = {
+            "run_name": spec.run_name,
+            "sweep": spec.sweep,
+            "parameter": spec.parameter,
+            "value": spec.value_label,
+            "numeric_value": "" if spec.value is None else spec.value,
+            "seed": spec.seed,
+            "noise_rate": spec.noise_rate,
+            "config_path": str(config_path),
+            "run_dir": str(run_dir),
+            "checkpoint": str(checkpoint),
+            "config_hash": canonical_hash(config_to_plain(run_config)),
+            "scientific_hash": canonical_hash(scientific_payload(run_config)),
+            "base_config_hash": base_config_hash,
+            "status": status,
+            "hf_repo_id": args.hf_repo_id,
+            "hf_path": hf_checkpoint_path(spec.run_name) if args.hf_repo_id else "",
+            "hf_url": "",
+            "hf_status": "pending" if args.hf_repo_id else "disabled",
+        }
+        manifest_rows.append(row)
+        write_csv(manifest_path, manifest_rows, MANIFEST_FIELDS)
+
+        if not args.execute:
+            print(f"[{index}/{len(specs)}] planned {spec.run_name}: {config_path}")
+            continue
+        if checkpoint_complete(checkpoint, bool(run_config.model.use_lora)) and not args.force:
+            row["status"] = "checkpoint_exists"
+            write_csv(manifest_path, manifest_rows, MANIFEST_FIELDS)
+            print(f"[{index}/{len(specs)}] skipping existing checkpoint: {checkpoint}")
+        else:
+            command = [sys.executable, "train_resolved_config.py", "--config", str(config_path)]
+            print(f"[{index}/{len(specs)}] training {spec.run_name}")
+            row["status"] = "running"
+            write_csv(manifest_path, manifest_rows, MANIFEST_FIELDS)
+            try:
+                subprocess.run(command, check=True, cwd=Path(__file__).resolve().parent)
+            except subprocess.CalledProcessError:
+                row["status"] = "failed"
+                write_csv(manifest_path, manifest_rows, MANIFEST_FIELDS)
+                raise
+            if not checkpoint_complete(checkpoint, bool(run_config.model.use_lora)):
+                row["status"] = "missing_checkpoint"
+                write_csv(manifest_path, manifest_rows, MANIFEST_FIELDS)
+                raise RuntimeError(
+                    f"Training finished but a complete LATEST checkpoint was not created: "
+                    f"{checkpoint}"
+                )
+            row["status"] = "trained"
+            write_csv(manifest_path, manifest_rows, MANIFEST_FIELDS)
+
+        if hf_api is not None:
+            print(
+                f"[{index}/{len(specs)}] uploading {spec.run_name} to "
+                f"{args.hf_repo_id}/{row['hf_path']}"
+            )
+            row["hf_status"] = "uploading"
+            write_csv(manifest_path, manifest_rows, MANIFEST_FIELDS)
+            try:
+                destination, url = upload_checkpoint_to_hf(
+                    api=hf_api,
+                    repo_id=args.hf_repo_id,
+                    row=row,
+                    checkpoint=checkpoint,
+                    adapter_only=args.hf_upload_adapter_only,
+                )
+            except Exception:
+                row["hf_status"] = "failed"
+                write_csv(manifest_path, manifest_rows, MANIFEST_FIELDS)
+                raise
+            row["hf_path"] = destination
+            row["hf_url"] = url
+            row["hf_status"] = "uploaded"
+            write_csv(manifest_path, manifest_rows, MANIFEST_FIELDS)
+
+    write_json(
+        output_root / "config_audit.json",
+        {
+            "base_config": base_source,
+            "base_config_hash": base_config_hash,
+            "noise_manifest": str(noise_manifest),
+            "num_runs": len(specs),
+            "all_passed": all(audit["passed"] for audit in audits),
+            "runs": audits,
+        },
+    )
+    print(f"Wrote {len(specs)} audited run configs to {output_root}")
+    print(f"Manifest: {manifest_path}")
+    if not args.execute:
+        print("Dry run only. Re-run with --execute after inspecting config_audit.json.")
+
+
+if __name__ == "__main__":
+    main()

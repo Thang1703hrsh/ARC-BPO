@@ -27,7 +27,7 @@ def read_prompts(path: str) -> List[Dict[str, Any]]:
             for i, line in enumerate(f):
                 p = line.strip()
                 if p:
-                    prompts.append({"id": i, "prompt": p, "messages": None})
+                    prompts.append({"id": i, "source_id": i, "prompt": p, "messages": None})
     else:
         # assume jsonl
         with open(path, "r", encoding="utf-8") as f:
@@ -37,12 +37,22 @@ def read_prompts(path: str) -> List[Dict[str, Any]]:
                 if not line:
                     continue
                 obj = json.loads(line)
+                if "_meta" in obj:
+                    continue
                 pid = obj.get("id", i)
+                source_id = obj.get("source_id", pid)
                 messages = obj.get("prompt_messages", None)
                 prompt_text = obj.get("prompt", "")
                 if messages is None and not prompt_text:
                     raise ValueError("JSONL lines must contain 'prompt_messages' or 'prompt' field.")
-                prompts.append({"id": int(pid), "prompt": prompt_text, "messages": messages})
+                prompts.append(
+                    {
+                        "id": int(pid),
+                        "source_id": source_id,
+                        "prompt": prompt_text,
+                        "messages": messages,
+                    }
+                )
                 i += 1
     if not prompts:
         raise ValueError("No prompts found.")
@@ -99,6 +109,8 @@ def main():
     ap.add_argument("--top_k", type=int, default=0)
     ap.add_argument("--seed", type=int, default=1234)
     ap.add_argument("--tensor_parallel_size", type=int, default=1, help="Number of GPUs for tensor parallelism")
+    ap.add_argument("--gpu_memory_utilization", type=float, default=0.90)
+    ap.add_argument("--max_model_len", type=int, default=4096)
     ap.add_argument("--logprobs_k", type=int, default=20, help="Number of top logprobs to return for entropy estimation")
     ap.add_argument("--trust_remote_code", action="store_true")
     ap.add_argument("--dtype", type=str, default="auto", choices=["auto", "float16", "bfloat16", "float32"])
@@ -111,6 +123,8 @@ def main():
         trust_remote_code=args.trust_remote_code,
         dtype=args.dtype,
         seed=args.seed,
+        gpu_memory_utilization=args.gpu_memory_utilization,
+        max_model_len=args.max_model_len,
     )
 
     tokenizer = llm.get_tokenizer()
@@ -154,8 +168,11 @@ def main():
             "top_k": args.top_k,
             "seed": args.seed,
             "tensor_parallel_size": args.tensor_parallel_size,
+            "gpu_memory_utilization": args.gpu_memory_utilization,
+            "max_model_len": args.max_model_len,
             "logprobs_k": args.logprobs_k,
             "backend": "vllm",
+            "entropy_estimator": "renormalized_top_k",
         }
         f.write(json.dumps({"_meta": meta}, ensure_ascii=False) + "\n")
 
@@ -169,10 +186,13 @@ def main():
             # Generate with vLLM
             outputs = llm.generate(batch_texts, sampling_params)
 
-            for prompt_obj, output in zip(batch_prompts, outputs):
+            for prompt_obj, rendered_prompt, output in zip(batch_prompts, batch_texts, outputs):
                 rec: Dict[str, Any] = {
                     "id": prompt_obj["id"],
+                    "source_id": prompt_obj["source_id"],
                     "prompt": prompt_obj["prompt"],
+                    "prompt_messages": prompt_obj["messages"],
+                    "rendered_prompt": rendered_prompt,
                     "samples": [],
                 }
 

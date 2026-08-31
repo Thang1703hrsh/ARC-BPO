@@ -76,6 +76,7 @@ def _estimate_epoch_steps_fast(
     n_epochs: int,
     batch_size: int,
     cache_dir: Optional[str] = None,
+    dataset_revision: Optional[str] = None,
     sft_mode: bool = False,
 ) -> int:
     """Cheap scheduler-step estimate without tokenizing the full dataset."""
@@ -88,7 +89,12 @@ def _estimate_epoch_steps_fast(
 
     total_examples = 0
     for repo_name in repo_names:
-        ds = datasets.load_dataset(repo_name, split=split, cache_dir=cache_dir)
+        ds = datasets.load_dataset(
+            repo_name,
+            split=split,
+            cache_dir=cache_dir,
+            revision=dataset_revision,
+        )
         if sft_mode:
             # SFT groups duplicate prompts in get_dataset_from_hf, so raw rows are
             # a slight upper bound. Preference training has one pair per raw row.
@@ -127,7 +133,10 @@ class BasicTrainer(object):
 
         tokenizer_name_or_path = config.model.tokenizer_name_or_path or config.model.name_or_path
         rank0_print(f"Loading tokenizer {tokenizer_name_or_path}")
-        self.tokenizer = transformers.AutoTokenizer.from_pretrained(tokenizer_name_or_path)
+        self.tokenizer = transformers.AutoTokenizer.from_pretrained(
+            tokenizer_name_or_path,
+            revision=getattr(config.model, "revision", None),
+        )
         if self.tokenizer.pad_token_id is None:
             self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
 
@@ -138,6 +147,7 @@ class BasicTrainer(object):
             max_length=config.max_length,
             sft_mode=config.loss.name == "sft",
             seed=seed,
+            dataset_revision=getattr(config, "dataset_revision", None),
             # Deterministic chunker floor/ceiling for ARC-BPO (experiments.md: min 4 / max 64).
             min_tokens_per_chunk=int(getattr(config.loss, "min_tokens_per_chunk", 4)),
             max_tokens_per_chunk=int(getattr(config.loss, "max_tokens_per_chunk", 64)),
@@ -157,6 +167,7 @@ class BasicTrainer(object):
                 n_epochs=self.config.n_epochs,
                 batch_size=self.config.batch_size,
                 cache_dir=getattr(self.config, "cache_dir", None),
+                dataset_revision=getattr(self.config, "dataset_revision", None),
                 sft_mode=self.config.loss.name == "sft",
             )
         else:
@@ -182,6 +193,7 @@ class BasicTrainer(object):
             skip_examples=int(getattr(config, "skip_examples", 0)),
             label_noise_rate=float(getattr(config, "label_noise_rate", 0.0)),
             label_noise_seed=getattr(config, "label_noise_seed", None),
+            label_noise_indices_path=getattr(config, "label_noise_indices_path", None),
         )
         rank0_print("Loaded train data iterator")
         if int(config.n_eval_examples) > 0:
@@ -758,6 +770,9 @@ class BasicTrainer(object):
                 kappa=float(getattr(loss_config, "kappa", 2.0)),
                 use_advantage_shape=bool(getattr(loss_config, "use_advantage_shape", False)),
                 fallback_to_uniform=bool(getattr(loss_config, "fallback_to_uniform_shape", True)),
+                winsorize_advantages=bool(
+                    getattr(loss_config, "winsorize_advantages", True)
+                ),
                 lam=float(getattr(loss_config, "sba_lambda", 1.0)),
                 s=float(getattr(loss_config, "sba_scale", 4.0)),
                 exp_clip=float(getattr(loss_config, "exp_clip", 30.0)),

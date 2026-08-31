@@ -1,0 +1,14 @@
+# Install after the repository's normal training requirements.
+# The model/dataset stack is repeated here so this file can also create a
+# standalone analysis environment.
+torch>=2.6.0
+transformers>=4.52.4
+datasets>=3.5.0
+accelerate>=1.7.0
+peft>=0.14.0
+sentencepiece>=0.2.0
+protobuf>=4.23.3
+safetensors
+tqdm>=4.65.0
+scipy>=1.10.0
+matplotlib>=3.7.0

@@ -16,6 +16,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 def merge_adapter(
     base_model_path: str,
     adapter_path: str,
+    base_revision: str = None,
     output_path: str = None,
     device: str = "auto",
     torch_dtype: str = "auto",
@@ -63,6 +64,7 @@ def merge_adapter(
     # Load base model
     base_model = AutoModelForCausalLM.from_pretrained(
         base_model_path,
+        revision=base_revision,
         torch_dtype=dtype,
         device_map=device,
         trust_remote_code=True,
@@ -99,6 +101,7 @@ def merge_adapter(
     print("Loading tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained(
         base_model_path,
+        revision=base_revision,
         trust_remote_code=True,
     )
 
@@ -177,6 +180,12 @@ def main():
         help="Adapter path: local path or HF repo with subfolder (e.g., 'username/repo/checkpoints/final')",
     )
     parser.add_argument(
+        "--base_revision",
+        type=str,
+        default=None,
+        help="Optional immutable Hugging Face revision for the base model.",
+    )
+    parser.add_argument(
         "--output",
         type=str,
         default=None,
@@ -243,6 +252,7 @@ def main():
     merge_adapter(
         base_model_path=args.base_model,
         adapter_path=args.adapter,
+        base_revision=args.base_revision,
         output_path=args.output,
         device=args.device,
         torch_dtype=args.dtype,

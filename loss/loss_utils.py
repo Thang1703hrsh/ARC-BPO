@@ -247,6 +247,7 @@ def _advantage_shape(
     kappa: float,
     sign: float,
     fallback_to_uniform: bool,
+    winsorize: bool,
 ) -> torch.Tensor:
     if advantages is None:
         if fallback_to_uniform:
@@ -261,8 +262,8 @@ def _advantage_shape(
     if temperature <= 0:
         raise ValueError("ARC-BPO advantage-shape temperature must be positive.")
 
-    clipped = winsorize_advantages(advantages, kappa=kappa)
-    return torch.softmax(sign * clipped / temperature, dim=0).detach()
+    scores = winsorize_advantages(advantages, kappa=kappa) if winsorize else advantages.detach()
+    return torch.softmax(sign * scores / temperature, dim=0).detach()
 
 
 def construct_arc_bpo_one_sided_targets(
@@ -275,6 +276,7 @@ def construct_arc_bpo_one_sided_targets(
     kappa: float = 2.0,
     use_advantage_shape: bool = False,
     fallback_to_uniform: bool = True,
+    winsorize: bool = True,
     device: Optional[torch.device] = None,
     dtype: torch.dtype = torch.float32,
     verify_calibration: bool = True,
@@ -306,6 +308,7 @@ def construct_arc_bpo_one_sided_targets(
             kappa,
             sign=1.0,
             fallback_to_uniform=fallback_to_uniform,
+            winsorize=winsorize,
         )
         rho_l = _advantage_shape(
             rejected_advantages,
@@ -316,6 +319,7 @@ def construct_arc_bpo_one_sided_targets(
             kappa,
             sign=-1.0,
             fallback_to_uniform=fallback_to_uniform,
+            winsorize=winsorize,
         )
     else:
         pi_w = _uniform_shape(n_chosen_chunks, device, dtype)

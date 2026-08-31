@@ -1,5 +1,6 @@
 # Qwen2.5-7B-Instruct backbone for ARC-BPO experiments.
 name_or_path: Qwen/Qwen2.5-7B-Instruct
+revision: null
 
 # the name of the tokenizer to use; if null, will use the tokenizer from the model
 tokenizer_name_or_path: null

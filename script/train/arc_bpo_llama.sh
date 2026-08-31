@@ -28,9 +28,14 @@ LOG_DIR="${LOG_DIR:-${OUTPUT_DIR}/logs}"
 cd "${REPO_ROOT}"
 
 MODEL_CONFIG="${MODEL_CONFIG:-llama_8b}"
+MODEL_REVISION="${MODEL_REVISION:-}"
 DATASETS_RAW="${DATASETS_RAW:-princeton-nlp/llama3-ultrafeedback-armorm}"
+DATASET_REVISION="${DATASET_REVISION:-}"
 TRAIN_SPLIT="${TRAIN_SPLIT:-train}"
 TEST_SPLIT="${TEST_SPLIT:-test}"
+SEED="${SEED:-0}"
+EXP_NAME="${EXP_NAME:-}"
+RUN_DIR="${RUN_DIR:-}"
 
 # --- Batch sizing (auto, scales with GPU count) ---------------------------
 # Per-GPU microbatch is the real memory knob: per_gpu = BATCH_SIZE/GRAD_ACCUM/NUM_GPUS.
@@ -78,10 +83,9 @@ HF_PRIVATE="${HF_PRIVATE:-true}"
 HF_UPLOAD_ADAPTER_ONLY="${HF_UPLOAD_ADAPTER_ONLY:-true}"
 
 # --- ARC-BPO loss hyperparameters (Llama-3-8B / Llama3-UltraFeedback-ArmoRM) ---
-# Base 8B SFT checkpoint. This dataset is ArmoRM-scored, so unlike pure binary
-# UFB it actually carries a reward gap that could feed delta_star and an
-# advantage proxy (spec sec. 6/7) -- a future upgrade. For now we use a fixed
-# finite margin slightly above the default to drive the weakly-aligned base.
+# Base 8B SFT checkpoint. The data loader maps Princeton's aligned
+# all_generated_responses/all_rm_scores fields to detached per-chunk proxies.
+# Delta remains a fixed finite margin so allocation is the controlled factor.
 BETA="${BETA:-0.1}"
 DELTA_STAR="${DELTA_STAR:-2.5}"
 ARC_T="${ARC_T:-2.0}"
@@ -89,10 +93,11 @@ KAPPA="${KAPPA:-2.0}"
 SBA_LAMBDA="${SBA_LAMBDA:-1.0}"
 SBA_SCALE="${SBA_SCALE:-4.0}"
 EXP_CLIP="${EXP_CLIP:-30.0}"
-# NOTE: the pipeline does not yet build an advantage proxy from the ArmoRM
-# scores, so use_advantage_shape would fall back to uniform. Kept false.
+# Uniform remains the public default. Controlled advantage runs should set
+# USE_ADVANTAGE_SHAPE=true and FALLBACK_TO_UNIFORM_SHAPE=false.
 USE_ADVANTAGE_SHAPE="${USE_ADVANTAGE_SHAPE:-false}"
 FALLBACK_TO_UNIFORM_SHAPE="${FALLBACK_TO_UNIFORM_SHAPE:-true}"
+WINSORIZE_ADVANTAGES="${WINSORIZE_ADVANTAGES:-true}"
 
 # Deterministic chunker floor/ceiling (matches experiments.md: min 4 / max 64).
 MIN_TOKENS_PER_CHUNK="${MIN_TOKENS_PER_CHUNK:-4}"
@@ -122,6 +127,7 @@ CMD=(
   loss.exp_clip="${EXP_CLIP}"
   loss.use_advantage_shape="${USE_ADVANTAGE_SHAPE}"
   loss.fallback_to_uniform_shape="${FALLBACK_TO_UNIFORM_SHAPE}"
+  loss.winsorize_advantages="${WINSORIZE_ADVANTAGES}"
   loss.min_tokens_per_chunk="${MIN_TOKENS_PER_CHUNK}"
   loss.max_tokens_per_chunk="${MAX_TOKENS_PER_CHUNK}"
   output_dir="${OUTPUT_DIR}"
@@ -146,8 +152,22 @@ CMD=(
   save_every_examples="${SAVE_EVERY_EXAMPLES}"
   do_first_eval="${DO_FIRST_EVAL}"
   activation_checkpointing="${ACTIVATION_CHECKPOINTING}"
+  seed="${SEED}"
   wandb.enabled=false
 )
+
+if [[ -n "${EXP_NAME}" ]]; then
+  CMD+=(exp_name="${EXP_NAME}")
+fi
+if [[ -n "${RUN_DIR}" ]]; then
+  CMD+=(local_run_dir="${RUN_DIR}")
+fi
+if [[ -n "${MODEL_REVISION}" ]]; then
+  CMD+=(model.revision="${MODEL_REVISION}")
+fi
+if [[ -n "${DATASET_REVISION}" ]]; then
+  CMD+=(dataset_revision="${DATASET_REVISION}")
+fi
 
 echo "[LOG] ${TRAIN_LOG}"
 printf '[RUN]'

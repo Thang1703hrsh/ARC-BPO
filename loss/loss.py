@@ -25,18 +25,24 @@ def bregman_loss(
 
 def sba_h(R: torch.Tensor, lam: float = 1.0, s: float = 4.0) -> torch.Tensor:
     """Scaled Basu's power-divergence generator for ARC-BPO."""
-    if lam <= 0:
-        raise ValueError("ARC-BPO SBA requires lambda > 0.")
+    if lam < 0:
+        raise ValueError("ARC-BPO SBA requires lambda >= 0.")
     if s <= 0:
         raise ValueError("ARC-BPO SBA requires scale s > 0.")
+    if lam == 0:
+        # Exact lambda -> 0 limit of
+        # (R^(1+lambda) - R) / (s*lambda*(1+lambda)).
+        return R * torch.log(R) / s
     return (R.pow(1.0 + lam) - R) / (s * lam * (1.0 + lam))
 
 
 def sba_h_prime(R: torch.Tensor, lam: float = 1.0, s: float = 4.0) -> torch.Tensor:
-    if lam <= 0:
-        raise ValueError("ARC-BPO SBA requires lambda > 0.")
+    if lam < 0:
+        raise ValueError("ARC-BPO SBA requires lambda >= 0.")
     if s <= 0:
         raise ValueError("ARC-BPO SBA requires scale s > 0.")
+    if lam == 0:
+        return (torch.log(R) + 1.0) / s
     return (((1.0 + lam) * R.pow(lam)) - 1.0) / (s * lam * (1.0 + lam))
 
 
@@ -66,6 +72,7 @@ def arc_bpo_pair_loss(
     kappa: float = 2.0,
     use_advantage_shape: bool = False,
     fallback_to_uniform: bool = True,
+    winsorize_advantages: bool = True,
     lam: float = 1.0,
     s: float = 4.0,
     exp_clip: float = 30.0,
@@ -98,6 +105,7 @@ def arc_bpo_pair_loss(
         kappa=kappa,
         use_advantage_shape=use_advantage_shape,
         fallback_to_uniform=fallback_to_uniform,
+        winsorize=winsorize_advantages,
         device=device,
         dtype=dtype,
         verify_calibration=verify_calibration,

@@ -9,6 +9,7 @@ beta: 0.1
 # One-sided chunk target shape.
 use_advantage_shape: false
 fallback_to_uniform_shape: true
+winsorize_advantages: true
 T: 2.0
 kappa: 2.0
 

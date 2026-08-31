@@ -15,6 +15,7 @@ debug: false
 fsdp_port: null
 
 datasets: HuggingFaceH4/ultrafeedback_binarized
+dataset_revision: null
 dataset_train_split: train_prefs
 dataset_test_split: test_prefs
 
@@ -84,6 +85,9 @@ skip_examples: 0
 # iterator randomly swaps chosen/rejected pairs with this probability.
 label_noise_rate: 0.0
 label_noise_seed: 0
+# Optional persisted corruption manifest. Sensitivity sweeps point every noisy
+# run at the same file so preference-label flips are identical across settings.
+label_noise_indices_path: null
 
 # the number of examples to evaluate on (and sample from, if sample_during_eval is true)
 n_eval_examples: 64
