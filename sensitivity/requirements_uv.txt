@@ -1,0 +1,19 @@
+# Reproducible Linux/uv environment matching modal_sensitivity.py.
+# Install torch==2.6.0 from the CUDA 12.4 PyTorch index first; vLLM requires it.
+numpy==1.26.4
+transformers==4.52.4
+datasets==3.5.0
+accelerate==1.7.0
+peft==0.15.2
+hydra-core==1.3.2
+omegaconf==2.3.0
+wandb==0.20.1
+vllm==0.8.5
+lm-eval[vllm,sentencepiece]==0.4.9.2
+huggingface_hub[hf_xet]>=0.31.0,<1
+safetensors>=0.5.3
+sentencepiece>=0.2.0
+protobuf>=4.25.0
+tqdm>=4.67.0
+matplotlib>=3.8.0
+scipy>=1.12.0

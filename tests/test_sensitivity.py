@@ -11,7 +11,7 @@ except ImportError:  # Minimal unit-test environments may omit training/Hydra de
     OmegaConf = None
 
 from evaluate_sensitivity import build_lm_eval_command, extract_task_score
-from run_sensitivity import hf_checkpoint_path, upload_checkpoint_to_hf
+from run_sensitivity import execution_preflight, hf_checkpoint_path, upload_checkpoint_to_hf
 try:
     from preference_datasets import get_batch_iterator
 except ModuleNotFoundError as error:
@@ -168,6 +168,43 @@ class LabelNoiseManifestTest(unittest.TestCase):
 
 
 class EvaluationAndSummaryTest(unittest.TestCase):
+    def test_four_a100_preflight_reports_effective_batching(self):
+        config = SimpleNamespace(batch_size=64, gradient_accumulation_steps=4, n_examples=10000)
+        result = execution_preflight(
+            config,
+            visible_gpus=4,
+            gpu_names=["NVIDIA A100-SXM4-80GB"] * 4,
+            expected_gpus=4,
+            expected_gpu_name="A100",
+        )
+        self.assertEqual(result["per_gpu_microbatch"], 4)
+        self.assertEqual(result["optimizer_steps"], 157)
+        self.assertEqual(result["full_batch_examples"], 10048)
+
+    def test_preflight_rejects_wrong_gpu_or_indivisible_batch(self):
+        config = SimpleNamespace(batch_size=64, gradient_accumulation_steps=4, n_examples=10000)
+        with self.assertRaisesRegex(RuntimeError, "Expected 4"):
+            execution_preflight(
+                config,
+                visible_gpus=2,
+                gpu_names=["NVIDIA A100"] * 2,
+                expected_gpus=4,
+            )
+        with self.assertRaisesRegex(RuntimeError, "mismatched devices"):
+            execution_preflight(
+                config,
+                visible_gpus=4,
+                gpu_names=["NVIDIA H100"] * 4,
+                expected_gpu_name="A100",
+            )
+        config.batch_size = 63
+        with self.assertRaisesRegex(ValueError, "must be divisible"):
+            execution_preflight(
+                config,
+                visible_gpus=4,
+                gpu_names=["NVIDIA A100"] * 4,
+            )
+
     def test_hf_checkpoint_paths_are_stable_and_readable(self):
         self.assertEqual(
             hf_checkpoint_path("sens_T_0.5_clean_seed0"),

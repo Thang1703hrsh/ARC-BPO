@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import os
 import re
 import shutil
@@ -73,6 +74,67 @@ def hf_checkpoint_path(run_name: str) -> str:
     if not safe_name:
         raise ValueError("run_name must contain at least one safe character.")
     return f"checkpoints/{safe_name}"
+
+
+def execution_preflight(
+    config,
+    *,
+    visible_gpus: int,
+    gpu_names: List[str],
+    expected_gpus: int = 0,
+    expected_gpu_name: str = "",
+) -> Dict[str, Any]:
+    """Validate the FSDP/GPU/batch contract before starting an expensive sweep."""
+    if visible_gpus < 1:
+        raise RuntimeError("No visible CUDA GPUs were found.")
+    if len(gpu_names) != visible_gpus:
+        raise ValueError(
+            f"Received {len(gpu_names)} GPU names for {visible_gpus} visible GPUs."
+        )
+    if expected_gpus and visible_gpus != expected_gpus:
+        raise RuntimeError(
+            f"Expected {expected_gpus} visible CUDA GPUs, found {visible_gpus}."
+        )
+    expected_name = expected_gpu_name.strip().lower()
+    if expected_name:
+        mismatched = [name for name in gpu_names if expected_name not in name.lower()]
+        if mismatched:
+            raise RuntimeError(
+                f"Expected every GPU name to contain {expected_gpu_name!r}; "
+                f"mismatched devices: {mismatched}."
+            )
+
+    batch_size = int(config.batch_size)
+    grad_accum = int(config.gradient_accumulation_steps)
+    if batch_size <= 0 or grad_accum <= 0:
+        raise ValueError("batch_size and gradient_accumulation_steps must be positive.")
+    divisor = grad_accum * visible_gpus
+    if batch_size % divisor:
+        raise ValueError(
+            f"Global batch_size={batch_size} must be divisible by "
+            f"gradient_accumulation_steps*visible_gpus={divisor}."
+        )
+
+    configured_examples = getattr(config, "n_examples", None)
+    optimizer_steps = None
+    full_batch_examples = None
+    if configured_examples is not None:
+        configured_examples = int(configured_examples)
+        if configured_examples <= 0:
+            raise ValueError("n_examples must be positive when it is configured.")
+        optimizer_steps = math.ceil(configured_examples / batch_size)
+        full_batch_examples = optimizer_steps * batch_size
+
+    return {
+        "visible_gpus": visible_gpus,
+        "gpu_names": list(gpu_names),
+        "global_batch_size": batch_size,
+        "gradient_accumulation_steps": grad_accum,
+        "per_gpu_microbatch": batch_size // divisor,
+        "configured_examples": configured_examples,
+        "optimizer_steps": optimizer_steps,
+        "full_batch_examples": full_batch_examples,
+    }
 
 
 def checkpoint_complete(checkpoint: Path, use_lora: bool) -> bool:
@@ -208,6 +270,11 @@ def parse_args() -> argparse.Namespace:
         help="When executing, require exactly this many visible CUDA GPUs; 0 disables the check.",
     )
     parser.add_argument(
+        "--expected_gpu_name",
+        default="",
+        help="When executing, require every CUDA device name to contain this text.",
+    )
+    parser.add_argument(
         "--hf_repo_id",
         default=os.environ.get("HF_REPO_ID", ""),
         help="Optional model repo receiving every checkpoint (or set HF_REPO_ID).",
@@ -233,6 +300,8 @@ def main():
         raise ValueError("noise_rate must be strictly between zero and one.")
     if args.max_runs < 0:
         raise ValueError("max_runs cannot be negative.")
+    if args.expected_gpus < 0:
+        raise ValueError("expected_gpus cannot be negative.")
 
     output_root = Path(args.output_root).resolve()
     output_root.mkdir(parents=True, exist_ok=True)
@@ -268,13 +337,31 @@ def main():
     if args.max_runs:
         specs = specs[: args.max_runs]
 
-    if args.execute and args.expected_gpus:
+    if args.execute:
         import torch
 
         visible_gpus = torch.cuda.device_count()
-        if visible_gpus != args.expected_gpus:
-            raise RuntimeError(
-                f"Expected {args.expected_gpus} visible CUDA GPUs, found {visible_gpus}."
+        gpu_names = [torch.cuda.get_device_name(index) for index in range(visible_gpus)]
+        preflight = execution_preflight(
+            base,
+            visible_gpus=visible_gpus,
+            gpu_names=gpu_names,
+            expected_gpus=args.expected_gpus,
+            expected_gpu_name=args.expected_gpu_name,
+        )
+        print(f"[preflight] GPUs: {preflight['gpu_names']}")
+        print(
+            "[preflight] global_batch={global_batch_size} grad_accum="
+            "{gradient_accumulation_steps} per_gpu_microbatch={per_gpu_microbatch}".format(
+                **preflight
+            )
+        )
+        if preflight["configured_examples"] is not None:
+            print(
+                "[preflight] configured_examples={configured_examples} optimizer_steps="
+                "{optimizer_steps} full_batch_examples={full_batch_examples}".format(
+                    **preflight
+                )
             )
 
     hf_api = None
