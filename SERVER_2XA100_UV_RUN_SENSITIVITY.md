@@ -137,33 +137,26 @@ Không cần chạy `hf auth login`. Token phải có quyền ghi model reposito
 được lưu một lần ở ngoài thư mục Git. Nhập token theo cách ẩn:
 
 ```bash
-install -d -m 700 "$HOME/.config/arc-bpo"
-read -rsp "Hugging Face token: " HF_TOKEN
-echo
-printf '%s\n' "$HF_TOKEN" > "$HOME/.config/arc-bpo/hf_token"
-unset HF_TOKEN
-chmod 600 "$HOME/.config/arc-bpo/hf_token"
-test -s "$HOME/.config/arc-bpo/hf_token" && echo "HF token file is ready"
+(
+  install -d -m 700 "$HOME/.config/arc-bpo"
+  read -rsp "Hugging Face token: " HF_TOKEN
+  echo
+  umask 077
+  printf '%s\n' "$HF_TOKEN" > "$HOME/.config/arc-bpo/hf_token"
+  chmod 600 "$HOME/.config/arc-bpo/hf_token"
+  test -s "$HOME/.config/arc-bpo/hf_token" && echo "HF token file is ready"
+)
 ```
 
 Launcher tự đọc `~/.config/arc-bpo/hf_token` và chỉ export token trong process
 train. Token không được in ra terminal/log và không nằm trong repository.
 
-Dùng repo riêng để không trộn checkpoint với run 4 GPU/accumulation 4:
-
-```bash
-export HF_REPO_ID=ducthang1703/llama3-arc-bpo-sensitivity-10k-bs64-2xa100-ga8
-export HF_PRIVATE=false
-export HF_UPLOAD_ADAPTER_ONLY=true
-```
+Không cần export thêm biến Hugging Face. Launcher mặc định upload LoRA adapter
+vào public repo `ducthang1703/llama3-arc-bpo-sensitivity-10k-bs64-2xa100-ga8`.
 
 ## 6. Chạy bằng Bash launcher
 
-`script/train/arc_bpo_sensitivity.sh` là wrapper Bash cho toàn bộ workflow.
-Bạn không cần gõ trực tiếp tên các file Python. Các mode hỗ trợ gồm `audit`,
-`smoke`, `full`, `evaluate` và `summarize`.
-
-Trước tiên, chạy audit và một smoke run trong `tmux`:
+Chạy trong `tmux` để job không dừng khi mất kết nối SSH:
 
 ```bash
 tmux new -s arc-sensitivity-2gpu
@@ -171,179 +164,71 @@ bash script/train/arc_bpo_sensitivity.sh audit
 bash script/train/arc_bpo_sensitivity.sh smoke
 ```
 
-Chỉ chạy full sau khi smoke run hoàn thành và không bị CUDA OOM. Ví dụ theo
-cùng kiểu truyền biến môi trường của các launcher train:
+Chỉ chạy toàn bộ 14 settings sau khi smoke run hoàn thành và không bị CUDA OOM:
 
 ```bash
-GPU_IDS=0,1 \
-N_EXAMPLES=10000 \
-BATCH_SIZE=64 \
-GRAD_ACCUM=8 \
-N_EVAL_EXAMPLES=0 \
-DO_FIRST_EVAL=false \
-USE_LORA=true \
-HF_REPO_ID=ducthang1703/llama3-arc-bpo-sensitivity-10k-bs64-2xa100-ga8 \
-HF_PRIVATE=false \
-HF_UPLOAD_ADAPTER_ONLY=true \
-SAVE_EVERY_EXAMPLES=10000 \
 bash script/train/arc_bpo_sensitivity.sh full
 ```
 
-Nếu file mặc định chưa tồn tại và chưa export `HF_TOKEN`, launcher sẽ dừng ở
-prompt `Hugging Face token:`. Paste token rồi nhấn Enter; token chỉ tồn tại trong
-process hiện tại. Có thể chỉ định một token file khác đã `chmod 600`:
+Launcher đã đặt sẵn GPU `0,1`, 10k examples, global batch 64, accumulation 8,
+LoRA, seed 0, repo Hugging Face và chế độ chỉ upload adapter. Không cần export
+lại các giá trị này.
 
-```bash
-HF_TOKEN_FILE="$HOME/.config/arc-bpo/hf_token" \
-bash script/train/arc_bpo_sensitivity.sh full
-```
-
-Các lệnh rút gọn khác:
-
-```bash
-bash script/train/arc_bpo_sensitivity.sh audit
-bash script/train/arc_bpo_sensitivity.sh smoke
-bash script/train/arc_bpo_sensitivity.sh evaluate
-bash script/train/arc_bpo_sensitivity.sh summarize
-```
-
-Các phần dưới đây giữ lại lệnh Python tương đương để debug khi cần.
-
-## 7. Audit-only trước khi train
-
-Lệnh này sinh và audit 14 config nhưng chưa dùng GPU để train:
-
-```bash
-CUDA_VISIBLE_DEVICES=0,1 \
-.venv/bin/python run_sensitivity.py \
-  --preset llama3-10k-bs64 \
-  --gradient_accumulation_steps 8 \
-  --output_root outputs/sensitivity/llama3-10k-bs64-2xa100-ga8 \
-  --seeds 0 \
-  --noise_rate 0.20 \
-  --noise_seed 2026 \
-  --expected_gpus 2 \
-  --expected_gpu_name A100 \
-  --exclude_default_points
-```
-
-Kiểm tra phải có 14 run rows và đúng một seed `0`:
-
-```bash
-wc -l outputs/sensitivity/llama3-10k-bs64-2xa100-ga8/run_manifest.csv
-
-tail -n +2 outputs/sensitivity/llama3-10k-bs64-2xa100-ga8/run_manifest.csv \
-  | cut -d, -f6 \
-  | sort -u
-```
-
-Kết quả mong đợi:
-
-```text
-15 outputs/sensitivity/llama3-10k-bs64-2xa100-ga8/run_manifest.csv
-0
-```
-
-## 8. Chạy thử một setting
-
-Nên chạy trong tmux để job không dừng khi SSH mất kết nối:
-
-```bash
-tmux new -s arc-sensitivity-2gpu
-set -o pipefail
-
-CUDA_VISIBLE_DEVICES=0,1 \
-.venv/bin/python -u run_sensitivity.py \
-  --preset llama3-10k-bs64 \
-  --gradient_accumulation_steps 8 \
-  --output_root outputs/sensitivity/llama3-10k-bs64-2xa100-ga8 \
-  --seeds 0 \
-  --noise_rate 0.20 \
-  --noise_seed 2026 \
-  --expected_gpus 2 \
-  --expected_gpu_name A100 \
-  --exclude_default_points \
-  --max_runs 1 \
-  --execute \
-  2>&1 | tee outputs/sensitivity/llama3-10k-bs64-2xa100-ga8/first-run.log
-```
-
-Detach tmux bằng `Ctrl+B`, sau đó `D`. Quay lại bằng:
+Detach khỏi `tmux` bằng `Ctrl+B`, sau đó nhấn `D`. Quay lại bằng:
 
 ```bash
 tmux attach -t arc-sensitivity-2gpu
 ```
 
-Nếu smoke run CUDA OOM trên A100-40GB, không chạy full grid. Hai GPU chứa cả
-policy và reference model FSDP nên model-state memory vẫn cao dù micro-batch đã
-giữ ở mức 4/GPU.
+## 7. Kiểm tra và theo dõi
 
-## 9. Chạy toàn bộ 14 settings
-
-Sau khi run đầu thành công:
+Sau `audit`, manifest phải có một dòng header và 14 run rows:
 
 ```bash
-set -o pipefail
-
-CUDA_VISIBLE_DEVICES=0,1 \
-.venv/bin/python -u run_sensitivity.py \
-  --preset llama3-10k-bs64 \
-  --gradient_accumulation_steps 8 \
-  --output_root outputs/sensitivity/llama3-10k-bs64-2xa100-ga8 \
-  --seeds 0 \
-  --noise_rate 0.20 \
-  --noise_seed 2026 \
-  --expected_gpus 2 \
-  --expected_gpu_name A100 \
-  --exclude_default_points \
-  --execute \
-  2>&1 | tee outputs/sensitivity/llama3-10k-bs64-2xa100-ga8/training.log
+wc -l outputs/sensitivity/llama3-10k-bs64-2xa100-ga8/run_manifest.csv
 ```
 
-Mỗi setting dùng cả 2 A100; 14 settings chạy tuần tự. Với cùng micro-batch/GPU,
-training thường chậm gần gấp đôi cấu hình 4 GPU. Nên dự phòng khoảng 35-70 giờ,
-sau đó cộng thêm thời gian evaluation.
-
-Sau mỗi run thành công, launcher kiểm tra `LATEST` rồi upload LoRA adapter và
-audited config lên repo HF đã đặt ở bước 5. Nếu process dừng, chạy lại nguyên
-command; checkpoint hoàn chỉnh được bỏ qua và HF upload được thử lại. Không dùng
-`--force` khi resume bình thường.
-
-## 10. Evaluation trên 2 GPU
+Kết quả mong đợi là `15`. Kiểm tra chỉ có training seed `0`:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1 \
-.venv/bin/python evaluate_sensitivity.py \
-  --manifest outputs/sensitivity/llama3-10k-bs64-2xa100-ga8/run_manifest.csv \
-  --only_status trained,checkpoint_exists \
-  --tensor_parallel_size 2 \
-  --dtype bfloat16 \
-  --gpu_memory_utilization 0.90 \
-  --max_model_len 4096 \
-  --batch_size auto:4 \
-  --merge_device auto \
-  --merge_dtype bfloat16
+tail -n +2 outputs/sensitivity/llama3-10k-bs64-2xa100-ga8/run_manifest.csv \
+  | cut -d, -f6 \
+  | sort -u
 ```
 
-Tổng hợp kết quả:
+Theo dõi GPU và log full run từ một terminal khác:
 
 ```bash
-.venv/bin/python summarize_sensitivity.py \
-  --manifest outputs/sensitivity/llama3-10k-bs64-2xa100-ga8/run_manifest.csv \
-  --published_anchors sensitivity/published_anchors.json \
-  --main_result sensitivity/published_main_result.json
+nvidia-smi
+tail -f outputs/sensitivity/llama3-10k-bs64-2xa100-ga8/full.log
 ```
 
-## 11. Lưu ý và xử lý lỗi
+Nếu process bị dừng, chạy lại cùng lệnh. Checkpoint hoàn chỉnh được bỏ qua và
+upload được thử lại; không dùng `--force` khi resume bình thường:
+
+```bash
+bash script/train/arc_bpo_sensitivity.sh full
+```
+
+## 8. Evaluation và tổng hợp
+
+```bash
+bash script/train/arc_bpo_sensitivity.sh evaluate
+bash script/train/arc_bpo_sensitivity.sh summarize
+```
+
+## 9. Lưu ý và xử lý lỗi
 
 - `Expected 2 visible CUDA GPUs`: kiểm tra `CUDA_VISIBLE_DEVICES=0,1` và scheduler.
 - `mismatched devices`: GPU được cấp không phải A100.
 - `must be divisible`: xác nhận batch 64, accumulation 8 và 2 GPU.
-- CUDA OOM: ưu tiên A100-80GB; không giảm global batch nếu cần so sánh trực tiếp
-  với setting bs64 mà chưa ghi nhận thay đổi protocol.
+- CUDA OOM trong smoke run: không chạy full grid; ưu tiên A100-80GB. Hai GPU
+  chứa cả policy và reference model FSDP nên A100-40GB có thể thiếu bộ nhớ.
 - HF 401/403: thay nội dung `~/.config/arc-bpo/hf_token` bằng token mới có write
   permission và giữ permission của file là `600`.
 - Dependency conflict: chạy `uv pip check`; nếu cần, tạo lại `.venv` và cài từ
   `sensitivity/requirements_uv.txt`.
 - Setting ghi `n_examples=10000`, nhưng iterator dùng full batch nên thực tế xử
   lý 157 x 64 = 10,048 examples/run, giống hành vi 4-GPU trước đó.
+- Mỗi setting dùng cả 2 A100 và 14 settings chạy tuần tự. Dự phòng khoảng 35-70
+  giờ cho training, sau đó cộng thêm thời gian evaluation.
