@@ -61,7 +61,7 @@ nvidia-smi -L
 Clone mới:
 
 ```bash
-git clone --branch test --single-branch \
+git clone --branch main --single-branch \
   https://github.com/Thang1703hrsh/ARC-BPO.git
 cd ARC-BPO
 ```
@@ -71,8 +71,8 @@ Nếu server đã có repo:
 ```bash
 cd ARC-BPO
 git fetch origin
-git switch test
-git pull --ff-only origin test
+git switch main
+git pull --ff-only origin main
 ```
 
 Xác nhận các file cần thiết:
@@ -131,23 +131,23 @@ assert all("A100" in torch.cuda.get_device_name(i) for i in range(2))
 '
 ```
 
-## 5. Đăng nhập Hugging Face
+## 5. Lưu Hugging Face token ngoài repository
 
-Token phải có quyền ghi model repository. Không ghi token trực tiếp vào script,
-file Markdown hoặc lệnh được lưu trong shell history. Nhập token theo cách ẩn:
+Không cần chạy `hf auth login`. Token phải có quyền ghi model repository và
+được lưu một lần ở ngoài thư mục Git. Nhập token theo cách ẩn:
 
 ```bash
+install -d -m 700 "$HOME/.config/arc-bpo"
 read -rsp "Hugging Face token: " HF_TOKEN
 echo
-export HF_TOKEN
-hf auth login --token "$HF_TOKEN"
+printf '%s\n' "$HF_TOKEN" > "$HOME/.config/arc-bpo/hf_token"
 unset HF_TOKEN
-hf auth whoami
+chmod 600 "$HOME/.config/arc-bpo/hf_token"
+test -s "$HOME/.config/arc-bpo/hf_token" && echo "HF token file is ready"
 ```
 
-`hf auth login` lưu credential trong thư mục cấu hình của user trên server, nên
-các lệnh train chạy bằng cùng user có thể upload mà không cần hard-code token.
-Không commit file chứa token vào Git.
+Launcher tự đọc `~/.config/arc-bpo/hf_token` và chỉ export token trong process
+train. Token không được in ra terminal/log và không nằm trong repository.
 
 Dùng repo riêng để không trộn checkpoint với run 4 GPU/accumulation 4:
 
@@ -189,9 +189,9 @@ SAVE_EVERY_EXAMPLES=10000 \
 bash script/train/arc_bpo_sensitivity.sh full
 ```
 
-Nếu chưa chạy `hf auth login` và chưa export `HF_TOKEN`, launcher sẽ dừng ở
-prompt `Hugging Face token:`. Paste token rồi nhấn Enter; token không được in ra
-terminal hoặc ghi vào log. Có thể truyền token từ một file riêng đã `chmod 600`:
+Nếu file mặc định chưa tồn tại và chưa export `HF_TOKEN`, launcher sẽ dừng ở
+prompt `Hugging Face token:`. Paste token rồi nhấn Enter; token chỉ tồn tại trong
+process hiện tại. Có thể chỉ định một token file khác đã `chmod 600`:
 
 ```bash
 HF_TOKEN_FILE="$HOME/.config/arc-bpo/hf_token" \
@@ -341,7 +341,8 @@ Tổng hợp kết quả:
 - `must be divisible`: xác nhận batch 64, accumulation 8 và 2 GPU.
 - CUDA OOM: ưu tiên A100-80GB; không giảm global batch nếu cần so sánh trực tiếp
   với setting bs64 mà chưa ghi nhận thay đổi protocol.
-- HF 401/403: chạy lại `hf auth login` bằng token có write permission.
+- HF 401/403: thay nội dung `~/.config/arc-bpo/hf_token` bằng token mới có write
+  permission và giữ permission của file là `600`.
 - Dependency conflict: chạy `uv pip check`; nếu cần, tạo lại `.venv` và cài từ
   `sensitivity/requirements_uv.txt`.
 - Setting ghi `n_examples=10000`, nhưng iterator dùng full batch nên thực tế xử
