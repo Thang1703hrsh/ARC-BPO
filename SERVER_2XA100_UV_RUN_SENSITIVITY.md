@@ -160,7 +160,6 @@ Chạy trong `tmux` để job không dừng khi mất kết nối SSH:
 
 ```bash
 tmux new -s arc-sensitivity-2gpu
-bash script/train/arc_bpo_sensitivity.sh audit
 bash script/train/arc_bpo_sensitivity.sh smoke
 ```
 
