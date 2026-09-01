@@ -24,10 +24,9 @@ Common overrides:
   HF_PRIVATE=false
   HF_UPLOAD_ADAPTER_ONLY=true
 
-Authentication (choose one; no `hf auth login` is required):
-  1. Store the token in ~/.config/arc-bpo/hf_token (default).
-  2. Export HF_TOKEN in the current shell.
-  3. Set HF_TOKEN_FILE to another chmod-600 file containing only the token.
+Authentication:
+  1. Run `hf auth login` before this launcher (recommended).
+  2. Alternatively, export HF_TOKEN or set HF_TOKEN_FILE.
 
 Never commit a live Hugging Face token to this script.
 EOF
@@ -126,7 +125,7 @@ EXCLUDE_DEFAULT_POINTS="${EXCLUDE_DEFAULT_POINTS:-true}"
 HF_REPO_ID="${HF_REPO_ID:-ducthang1703/llama3-arc-bpo-sensitivity-10k-bs64-2xa100-ga8}"
 HF_PRIVATE="${HF_PRIVATE:-false}"
 HF_UPLOAD_ADAPTER_ONLY="${HF_UPLOAD_ADAPTER_ONLY:-true}"
-HF_TOKEN_FILE="${HF_TOKEN_FILE:-${HOME}/.config/arc-bpo/hf_token}"
+HF_TOKEN_FILE="${HF_TOKEN_FILE:-}"
 
 export HF_REPO_ID HF_PRIVATE HF_UPLOAD_ADAPTER_ONLY
 mkdir -p "${OUTPUT_ROOT}"
@@ -157,7 +156,7 @@ ensure_hf_auth() {
   if [[ -z "${HF_TOKEN:-}" ]]; then
     if [[ ! -t 0 ]]; then
       echo "ERROR: no Hugging Face credential is available." >&2
-      echo "Create ${HF_TOKEN_FILE}, set HF_TOKEN, or set HF_TOKEN_FILE." >&2
+      echo "Run 'hf auth login', set HF_TOKEN, or set HF_TOKEN_FILE." >&2
       exit 1
     fi
     read -rsp "Hugging Face token: " HF_TOKEN

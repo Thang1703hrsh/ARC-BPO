@@ -131,25 +131,18 @@ assert all("A100" in torch.cuda.get_device_name(i) for i in range(2))
 '
 ```
 
-## 5. Lưu Hugging Face token ngoài repository
+## 5. Đăng nhập Hugging Face
 
-Không cần chạy `hf auth login`. Token phải có quyền ghi model repository và
-được lưu một lần ở ngoài thư mục Git. Nhập token theo cách ẩn:
+Đây là cách thông dụng và đơn giản nhất. Chạy lệnh sau rồi paste token có quyền
+`write` khi Hugging Face yêu cầu:
 
 ```bash
-(
-  install -d -m 700 "$HOME/.config/arc-bpo"
-  read -rsp "Hugging Face token: " HF_TOKEN
-  echo
-  umask 077
-  printf '%s\n' "$HF_TOKEN" > "$HOME/.config/arc-bpo/hf_token"
-  chmod 600 "$HOME/.config/arc-bpo/hf_token"
-  test -s "$HOME/.config/arc-bpo/hf_token" && echo "HF token file is ready"
-)
+hf auth login
+hf auth whoami
 ```
 
-Launcher tự đọc `~/.config/arc-bpo/hf_token` và chỉ export token trong process
-train. Token không được in ra terminal/log và không nằm trong repository.
+Token được Hugging Face CLI lưu cho user hiện tại; launcher tự sử dụng credential
+đó nên không cần nhập lại và không cần ghi token vào repository.
 
 Không cần export thêm biến Hugging Face. Launcher mặc định upload LoRA adapter
 vào public repo `ducthang1703/llama3-arc-bpo-sensitivity-10k-bs64-2xa100-ga8`.
@@ -223,8 +216,7 @@ bash script/train/arc_bpo_sensitivity.sh summarize
 - `must be divisible`: xác nhận batch 64, accumulation 8 và 2 GPU.
 - CUDA OOM trong smoke run: không chạy full grid; ưu tiên A100-80GB. Hai GPU
   chứa cả policy và reference model FSDP nên A100-40GB có thể thiếu bộ nhớ.
-- HF 401/403: thay nội dung `~/.config/arc-bpo/hf_token` bằng token mới có write
-  permission và giữ permission của file là `600`.
+- HF 401/403: chạy lại `hf auth login` bằng token có quyền `write`.
 - Dependency conflict: chạy `uv pip check`; nếu cần, tạo lại `.venv` và cài từ
   `sensitivity/requirements_uv.txt`.
 - Setting ghi `n_examples=10000`, nhưng iterator dùng full batch nên thực tế xử
