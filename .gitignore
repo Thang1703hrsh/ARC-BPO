@@ -23,13 +23,6 @@ checkpoint-*/
 pytorch_model*.bin
 adapter_model*.bin
 
-# Local experiment specifications/notes. Markdown files already tracked by
-# Git (for example README.md) remain tracked; this hides new local .md files.
-*.md
-# Explicitly requested operational guide; keep all other new Markdown local.
-!SERVER_4XA100_UV_RUN_SENSITIVITY.md
-!SERVER_2XA100_UV_RUN_SENSITIVITY.md
-
 # Synthetic/simulated artifacts must not be published as real results.
 *simulated*
 *simulation*
