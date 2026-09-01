@@ -28,6 +28,13 @@ Không chạy cấu hình 2 GPU với accumulation 4 nếu chưa kiểm tra bộ
 `noise_seed=2026` chỉ cố định cùng một tập preference pairs bị đảo nhãn trong
 các run noise 20%; nó không phải training seed thứ hai.
 
+> **Lưu ý về protocol:** launcher mặc định dùng `EXCLUDE_DEFAULT_POINTS=true`,
+> nên chạy 14 setting mới và khi tổng hợp sẽ dùng default anchors đã công bố từ
+> cấu hình 4 GPU/accumulation 4. Cách này phù hợp để chạy grid hiện tại nhưng
+> không phải exact-match 2 GPU/accumulation 8. Một bảng controlled sensitivity
+> nghiêm ngặt cần thêm clean default và noise-20 default được train bằng chính
+> cấu hình 2 GPU/accumulation 8 (tổng cộng 16 unique runs).
+
 ## 1. Yêu cầu server
 
 Khuyến nghị:
@@ -54,7 +61,7 @@ nvidia-smi -L
 Clone mới:
 
 ```bash
-git clone --branch main --single-branch \
+git clone --branch test --single-branch \
   https://github.com/Thang1703hrsh/ARC-BPO.git
 cd ARC-BPO
 ```
@@ -63,14 +70,19 @@ Nếu server đã có repo:
 
 ```bash
 cd ARC-BPO
-git pull --ff-only origin main
+git fetch origin
+git switch test
+git pull --ff-only origin test
 ```
 
 Xác nhận các file cần thiết:
 
 ```bash
 git status --short
-ls run_sensitivity.py sensitivity/common.py sensitivity/requirements_uv.txt
+ls run_sensitivity.py \
+  sensitivity/common.py \
+  sensitivity/requirements_uv.txt \
+  script/train/arc_bpo_sensitivity.sh
 ```
 
 ## 3. Tạo môi trường uv
@@ -121,12 +133,21 @@ assert all("A100" in torch.cuda.get_device_name(i) for i in range(2))
 
 ## 5. Đăng nhập Hugging Face
 
-Token phải có quyền ghi model repository:
+Token phải có quyền ghi model repository. Không ghi token trực tiếp vào script,
+file Markdown hoặc lệnh được lưu trong shell history. Nhập token theo cách ẩn:
 
 ```bash
-hf auth login
+read -rsp "Hugging Face token: " HF_TOKEN
+echo
+export HF_TOKEN
+hf auth login --token "$HF_TOKEN"
+unset HF_TOKEN
 hf auth whoami
 ```
+
+`hf auth login` lưu credential trong thư mục cấu hình của user trên server, nên
+các lệnh train chạy bằng cùng user có thể upload mà không cần hard-code token.
+Không commit file chứa token vào Git.
 
 Dùng repo riêng để không trộn checkpoint với run 4 GPU/accumulation 4:
 
@@ -136,7 +157,59 @@ export HF_PRIVATE=false
 export HF_UPLOAD_ADAPTER_ONLY=true
 ```
 
-## 6. Audit-only trước khi train
+## 6. Chạy bằng Bash launcher
+
+`script/train/arc_bpo_sensitivity.sh` là wrapper Bash cho toàn bộ workflow.
+Bạn không cần gõ trực tiếp tên các file Python. Các mode hỗ trợ gồm `audit`,
+`smoke`, `full`, `evaluate` và `summarize`.
+
+Trước tiên, chạy audit và một smoke run trong `tmux`:
+
+```bash
+tmux new -s arc-sensitivity-2gpu
+bash script/train/arc_bpo_sensitivity.sh audit
+bash script/train/arc_bpo_sensitivity.sh smoke
+```
+
+Chỉ chạy full sau khi smoke run hoàn thành và không bị CUDA OOM. Ví dụ theo
+cùng kiểu truyền biến môi trường của các launcher train:
+
+```bash
+GPU_IDS=0,1 \
+N_EXAMPLES=10000 \
+BATCH_SIZE=64 \
+GRAD_ACCUM=8 \
+N_EVAL_EXAMPLES=0 \
+DO_FIRST_EVAL=false \
+USE_LORA=true \
+HF_REPO_ID=ducthang1703/llama3-arc-bpo-sensitivity-10k-bs64-2xa100-ga8 \
+HF_PRIVATE=false \
+HF_UPLOAD_ADAPTER_ONLY=true \
+SAVE_EVERY_EXAMPLES=10000 \
+bash script/train/arc_bpo_sensitivity.sh full
+```
+
+Nếu chưa chạy `hf auth login` và chưa export `HF_TOKEN`, launcher sẽ dừng ở
+prompt `Hugging Face token:`. Paste token rồi nhấn Enter; token không được in ra
+terminal hoặc ghi vào log. Có thể truyền token từ một file riêng đã `chmod 600`:
+
+```bash
+HF_TOKEN_FILE="$HOME/.config/arc-bpo/hf_token" \
+bash script/train/arc_bpo_sensitivity.sh full
+```
+
+Các lệnh rút gọn khác:
+
+```bash
+bash script/train/arc_bpo_sensitivity.sh audit
+bash script/train/arc_bpo_sensitivity.sh smoke
+bash script/train/arc_bpo_sensitivity.sh evaluate
+bash script/train/arc_bpo_sensitivity.sh summarize
+```
+
+Các phần dưới đây giữ lại lệnh Python tương đương để debug khi cần.
+
+## 7. Audit-only trước khi train
 
 Lệnh này sinh và audit 14 config nhưng chưa dùng GPU để train:
 
@@ -171,7 +244,7 @@ Kết quả mong đợi:
 0
 ```
 
-## 7. Chạy thử một setting
+## 8. Chạy thử một setting
 
 Nên chạy trong tmux để job không dừng khi SSH mất kết nối:
 
@@ -205,7 +278,7 @@ Nếu smoke run CUDA OOM trên A100-40GB, không chạy full grid. Hai GPU chứ
 policy và reference model FSDP nên model-state memory vẫn cao dù micro-batch đã
 giữ ở mức 4/GPU.
 
-## 8. Chạy toàn bộ 14 settings
+## 9. Chạy toàn bộ 14 settings
 
 Sau khi run đầu thành công:
 
@@ -236,7 +309,7 @@ audited config lên repo HF đã đặt ở bước 5. Nếu process dừng, ch�
 command; checkpoint hoàn chỉnh được bỏ qua và HF upload được thử lại. Không dùng
 `--force` khi resume bình thường.
 
-## 9. Evaluation trên 2 GPU
+## 10. Evaluation trên 2 GPU
 
 ```bash
 CUDA_VISIBLE_DEVICES=0,1 \
@@ -261,7 +334,7 @@ Tổng hợp kết quả:
   --main_result sensitivity/published_main_result.json
 ```
 
-## 10. Lưu ý và xử lý lỗi
+## 11. Lưu ý và xử lý lỗi
 
 - `Expected 2 visible CUDA GPUs`: kiểm tra `CUDA_VISIBLE_DEVICES=0,1` và scheduler.
 - `mismatched devices`: GPU được cấp không phải A100.
