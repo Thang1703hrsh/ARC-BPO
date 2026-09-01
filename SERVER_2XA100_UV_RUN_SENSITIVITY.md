@@ -8,22 +8,23 @@ Dataset: princeton-nlp/llama3-ultrafeedback-armorm
 Training seed: 0 (một seed cho mọi setting)
 Nominal examples/run: 10,000
 Global batch size: 64
-Gradient accumulation: 8
+Gradient accumulation: 16
 GPU: 2x NVIDIA A100
-Per-GPU microbatch: 4
+Per-GPU microbatch: 2
 Fine-tuning: LoRA
 New training runs: 14
 ```
 
-So với hướng dẫn 4 GPU, accumulation được tăng từ 4 lên 8. Nhờ đó global
-batch vẫn là 64 và micro-batch vẫn là 4/GPU:
+Accumulation được tăng lên 16 để giữ global batch 64 nhưng giảm peak memory của
+mỗi GPU sau khi cấu hình accumulation 8 bị OOM:
 
 ```text
-64 / (8 accumulation x 2 GPU) = 4 examples/GPU/micro-step
+64 / (16 accumulation x 2 GPU) = 2 examples/GPU/micro-step
 ```
 
-Không chạy cấu hình 2 GPU với accumulation 4 nếu chưa kiểm tra bộ nhớ, vì khi
-đó micro-batch tăng thành 8/GPU và có nguy cơ CUDA OOM.
+Launcher cũng bật `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` và dùng phép
+tính token log-prob theo row chunks để tránh materialize một tensor `log_softmax`
+toàn vocabulary khoảng 7.5 GiB.
 
 `noise_seed=2026` chỉ cố định cùng một tập preference pairs bị đảo nhãn trong
 các run noise 20%; nó không phải training seed thứ hai.
@@ -31,9 +32,9 @@ các run noise 20%; nó không phải training seed thứ hai.
 > **Lưu ý về protocol:** launcher mặc định dùng `EXCLUDE_DEFAULT_POINTS=true`,
 > nên chạy 14 setting mới và khi tổng hợp sẽ dùng default anchors đã công bố từ
 > cấu hình 4 GPU/accumulation 4. Cách này phù hợp để chạy grid hiện tại nhưng
-> không phải exact-match 2 GPU/accumulation 8. Một bảng controlled sensitivity
+> không phải exact-match 2 GPU/accumulation 16. Một bảng controlled sensitivity
 > nghiêm ngặt cần thêm clean default và noise-20 default được train bằng chính
-> cấu hình 2 GPU/accumulation 8 (tổng cộng 16 unique runs).
+> cấu hình 2 GPU/accumulation 16 (tổng cộng 16 unique runs).
 
 ## 1. Yêu cầu server
 
@@ -145,7 +146,7 @@ Token được Hugging Face CLI lưu cho user hiện tại; launcher tự sử d
 đó nên không cần nhập lại và không cần ghi token vào repository.
 
 Không cần export thêm biến Hugging Face. Launcher mặc định upload LoRA adapter
-vào public repo `ducthang1703/llama3-arc-bpo-sensitivity-10k-bs64-2xa100-ga8`.
+vào public repo `ducthang1703/llama3-arc-bpo-sensitivity-10k-bs64-2xa100-ga16`.
 
 ## 6. Chạy bằng Bash launcher
 
@@ -162,7 +163,7 @@ Chỉ chạy toàn bộ 14 settings sau khi smoke run hoàn thành và không b�
 bash script/train/arc_bpo_sensitivity.sh full
 ```
 
-Launcher đã đặt sẵn GPU `0,1`, 10k examples, global batch 64, accumulation 8,
+Launcher đã đặt sẵn GPU `0,1`, 10k examples, global batch 64, accumulation 16,
 LoRA, seed 0, repo Hugging Face và chế độ chỉ upload adapter. Không cần export
 lại các giá trị này.
 
@@ -177,13 +178,13 @@ tmux attach -t arc-sensitivity-2gpu
 Sau `audit`, manifest phải có một dòng header và 14 run rows:
 
 ```bash
-wc -l outputs/sensitivity/llama3-10k-bs64-2xa100-ga8/run_manifest.csv
+wc -l outputs/sensitivity/llama3-10k-bs64-2xa100-ga16/run_manifest.csv
 ```
 
 Kết quả mong đợi là `15`. Kiểm tra chỉ có training seed `0`:
 
 ```bash
-tail -n +2 outputs/sensitivity/llama3-10k-bs64-2xa100-ga8/run_manifest.csv \
+tail -n +2 outputs/sensitivity/llama3-10k-bs64-2xa100-ga16/run_manifest.csv \
   | cut -d, -f6 \
   | sort -u
 ```
@@ -192,7 +193,7 @@ Theo dõi GPU và log full run từ một terminal khác:
 
 ```bash
 nvidia-smi
-tail -f outputs/sensitivity/llama3-10k-bs64-2xa100-ga8/full.log
+tail -f outputs/sensitivity/llama3-10k-bs64-2xa100-ga16/full.log
 ```
 
 Nếu process bị dừng, chạy lại cùng lệnh. Checkpoint hoàn chỉnh được bỏ qua và
@@ -213,7 +214,7 @@ bash script/train/arc_bpo_sensitivity.sh summarize
 
 - `Expected 2 visible CUDA GPUs`: kiểm tra `CUDA_VISIBLE_DEVICES=0,1` và scheduler.
 - `mismatched devices`: GPU được cấp không phải A100.
-- `must be divisible`: xác nhận batch 64, accumulation 8 và 2 GPU.
+- `must be divisible`: xác nhận batch 64, accumulation 16 và 2 GPU.
 - CUDA OOM trong smoke run: không chạy full grid; ưu tiên A100-80GB. Hai GPU
   chứa cả policy và reference model FSDP nên A100-40GB có thể thiếu bộ nhớ.
 - HF 401/403: chạy lại `hf auth login` bằng token có quyền `write`.
@@ -221,5 +222,5 @@ bash script/train/arc_bpo_sensitivity.sh summarize
   `sensitivity/requirements_uv.txt`.
 - Setting ghi `n_examples=10000`, nhưng iterator dùng full batch nên thực tế xử
   lý 157 x 64 = 10,048 examples/run, giống hành vi 4-GPU trước đó.
-- Mỗi setting dùng cả 2 A100 và 14 settings chạy tuần tự. Dự phòng khoảng 35-70
+- Mỗi setting dùng cả 2 A100 và 14 settings chạy tuần tự. Dự phòng khoảng 45-90
   giờ cho training, sau đó cộng thêm thời gian evaluation.

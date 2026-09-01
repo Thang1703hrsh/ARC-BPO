@@ -66,16 +66,16 @@ def resolved_base(use_advantage_shape=True):
 
 @unittest.skipIf(OmegaConf is None, "omegaconf is an optional training dependency")
 class SensitivityConfigTest(unittest.TestCase):
-    def test_two_gpu_preset_keeps_global_and_per_gpu_batch_contract(self):
+    def test_two_gpu_preset_keeps_global_batch_with_oom_safe_microbatch(self):
         with tempfile.TemporaryDirectory() as temporary:
             base = build_llama3_10k_bs64_base(
                 Path(__file__).resolve().parents[1],
                 Path(temporary),
                 seed=0,
-                gradient_accumulation_steps=8,
+                gradient_accumulation_steps=16,
             )
         self.assertEqual(base.batch_size, 64)
-        self.assertEqual(base.gradient_accumulation_steps, 8)
+        self.assertEqual(base.gradient_accumulation_steps, 16)
         result = execution_preflight(
             base,
             visible_gpus=2,
@@ -83,7 +83,7 @@ class SensitivityConfigTest(unittest.TestCase):
             expected_gpus=2,
             expected_gpu_name="A100",
         )
-        self.assertEqual(result["per_gpu_microbatch"], 4)
+        self.assertEqual(result["per_gpu_microbatch"], 2)
         self.assertEqual(result["optimizer_steps"], 157)
 
     def test_uniform_main_is_rejected(self):
@@ -189,8 +189,8 @@ class LabelNoiseManifestTest(unittest.TestCase):
 
 
 class EvaluationAndSummaryTest(unittest.TestCase):
-    def test_two_a100_preflight_preserves_microbatch_four(self):
-        config = SimpleNamespace(batch_size=64, gradient_accumulation_steps=8, n_examples=10000)
+    def test_two_a100_preflight_uses_oom_safe_microbatch_two(self):
+        config = SimpleNamespace(batch_size=64, gradient_accumulation_steps=16, n_examples=10000)
         result = execution_preflight(
             config,
             visible_gpus=2,
@@ -199,7 +199,7 @@ class EvaluationAndSummaryTest(unittest.TestCase):
             expected_gpu_name="A100",
         )
         self.assertEqual(result["global_batch_size"], 64)
-        self.assertEqual(result["per_gpu_microbatch"], 4)
+        self.assertEqual(result["per_gpu_microbatch"], 2)
         self.assertEqual(result["optimizer_steps"], 157)
 
     def test_four_a100_preflight_reports_effective_batching(self):

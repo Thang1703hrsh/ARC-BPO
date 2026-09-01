@@ -93,15 +93,26 @@ def compute_response_token_logps(
     logits: torch.FloatTensor,
     labels: torch.LongTensor,
     response_mask: torch.LongTensor,
+    row_chunk_size: int = 256,
 ) -> tuple[torch.FloatTensor, torch.BoolTensor]:
     """Gather teacher-forced token log-probs over assistant response tokens.
 
     The returned tensors are shifted to match next-token prediction positions:
     logits[:, t - 1] scores labels[:, t]. The mask is therefore
     response_mask[:, 1:] intersected with labels[:, 1:] != -100.
+
+    Computing ``logits.log_softmax(-1)`` materializes another tensor as large as
+    the full batch x sequence x vocabulary logits (about 7.5 GiB for the
+    Llama-3 sensitivity microbatch that motivated this implementation). Compute
+    the mathematically equivalent selected-logit minus logsumexp in bounded row
+    chunks instead, so peak temporary memory is independent of total sequence
+    rows. Chunk calculations use float32 to preserve the previous numerics when
+    the reference model emits float16 logits.
     """
     assert logits.shape[:-1] == labels.shape
     assert response_mask.shape == labels.shape
+    if row_chunk_size <= 0:
+        raise ValueError("row_chunk_size must be positive.")
 
     shifted_labels = labels[:, 1:].clone()
     shifted_logits = logits[:, :-1, :]
@@ -109,11 +120,36 @@ def compute_response_token_logps(
     valid_mask = shifted_response_mask & (shifted_labels != -100)
 
     shifted_labels[~valid_mask] = 0
-    token_logps = torch.gather(
-        shifted_logits.log_softmax(-1),
-        dim=2,
-        index=shifted_labels.unsqueeze(2),
-    ).squeeze(2)
+    compute_dtype = (
+        torch.float32
+        if shifted_logits.dtype in {torch.float16, torch.bfloat16}
+        else shifted_logits.dtype
+    )
+    batch_token_logps = []
+    for batch_index in range(shifted_logits.shape[0]):
+        row_logps = []
+        for start in range(0, shifted_logits.shape[1], row_chunk_size):
+            end = min(start + row_chunk_size, shifted_logits.shape[1])
+            # Slice one sequence at a time. Flattening ``[:, :-1, :]`` with
+            # reshape can make a hidden contiguous copy because of the gap
+            # between batches, recreating the very allocation avoided here.
+            logits_chunk = shifted_logits[batch_index, start:end].to(compute_dtype)
+            labels_chunk = shifted_labels[batch_index, start:end]
+            selected_logits = torch.gather(
+                logits_chunk,
+                dim=1,
+                index=labels_chunk.unsqueeze(1),
+            ).squeeze(1)
+            log_normalizers = torch.logsumexp(logits_chunk, dim=1)
+            row_logps.append(selected_logits - log_normalizers)
+        if row_logps:
+            batch_token_logps.append(torch.cat(row_logps, dim=0))
+        else:
+            batch_token_logps.append(
+                torch.empty(0, dtype=compute_dtype, device=shifted_logits.device)
+            )
+
+    token_logps = torch.stack(batch_token_logps, dim=0)
 
     return token_logps * valid_mask, valid_mask
 

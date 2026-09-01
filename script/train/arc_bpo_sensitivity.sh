@@ -5,6 +5,10 @@ set -euo pipefail
 # The Python files remain the implementation engine; this wrapper provides one
 # stable, environment-variable-driven command for server use.
 
+# Reduce CUDA allocator fragmentation before any Python process initializes
+# CUDA. Users can still override this from the environment when necessary.
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+
 usage() {
   cat <<'EOF'
 Usage:
@@ -19,8 +23,9 @@ MODE:
 
 Common overrides:
   GPU_IDS=0,1
-  OUTPUT_ROOT=outputs/sensitivity/llama3-10k-bs64-2xa100-ga8
-  HF_REPO_ID=ducthang1703/llama3-arc-bpo-sensitivity-10k-bs64-2xa100-ga8
+  GRAD_ACCUM=16
+  OUTPUT_ROOT=outputs/sensitivity/llama3-10k-bs64-2xa100-ga16
+  HF_REPO_ID=ducthang1703/llama3-arc-bpo-sensitivity-10k-bs64-2xa100-ga16
   HF_PRIVATE=false
   HF_UPLOAD_ADAPTER_ONLY=true
 
@@ -90,7 +95,7 @@ fi
 # running a different experiment than the command claims.
 N_EXAMPLES="${N_EXAMPLES:-10000}"
 BATCH_SIZE="${BATCH_SIZE:-64}"
-GRAD_ACCUM="${GRAD_ACCUM:-8}"
+GRAD_ACCUM="${GRAD_ACCUM:-16}"
 SEEDS="${SEEDS:-0}"
 USE_LORA="${USE_LORA:-true}"
 N_EVAL_EXAMPLES="${N_EVAL_EXAMPLES:-0}"
@@ -120,9 +125,9 @@ fi
 
 NOISE_RATE="${NOISE_RATE:-0.20}"
 NOISE_SEED="${NOISE_SEED:-2026}"
-OUTPUT_ROOT="${OUTPUT_ROOT:-${REPO_ROOT}/outputs/sensitivity/llama3-10k-bs64-2xa100-ga8}"
+OUTPUT_ROOT="${OUTPUT_ROOT:-${REPO_ROOT}/outputs/sensitivity/llama3-10k-bs64-2xa100-ga16}"
 EXCLUDE_DEFAULT_POINTS="${EXCLUDE_DEFAULT_POINTS:-true}"
-HF_REPO_ID="${HF_REPO_ID:-ducthang1703/llama3-arc-bpo-sensitivity-10k-bs64-2xa100-ga8}"
+HF_REPO_ID="${HF_REPO_ID:-ducthang1703/llama3-arc-bpo-sensitivity-10k-bs64-2xa100-ga16}"
 HF_PRIVATE="${HF_PRIVATE:-false}"
 HF_UPLOAD_ADAPTER_ONLY="${HF_UPLOAD_ADAPTER_ONLY:-true}"
 HF_TOKEN_FILE="${HF_TOKEN_FILE:-}"

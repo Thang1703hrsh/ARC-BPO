@@ -697,26 +697,30 @@ class BasicTrainer(object):
         """Compute ARC-BPO one-sided chunk losses without TBPO token matching."""
         concatenated_batch = concatenated_inputs(batch)
 
+        # Compute and reduce the no-grad reference logits first. Keeping full
+        # policy and reference vocabulary logits alive at the same time adds
+        # roughly 8-16 GiB at Llama-3 sequence lengths and caused 2xA100 OOMs.
+        with torch.no_grad():
+            reference_all_logits = reference_model(
+                concatenated_batch["concatenated_input_ids"],
+                attention_mask=concatenated_batch["concatenated_attention_mask"],
+                use_cache=False,
+            ).logits
+            reference_token_logps, response_mask = compute_response_token_logps(
+                reference_all_logits,
+                concatenated_batch["concatenated_labels"],
+                concatenated_batch["concatenated_response_mask"],
+            )
+        del reference_all_logits
+
         all_logits = model(
             concatenated_batch["concatenated_input_ids"],
             attention_mask=concatenated_batch["concatenated_attention_mask"],
             use_cache=False,
         ).logits.to(torch.float32)
 
-        with torch.no_grad():
-            reference_all_logits = reference_model(
-                concatenated_batch["concatenated_input_ids"],
-                attention_mask=concatenated_batch["concatenated_attention_mask"],
-                use_cache=False,
-            ).logits.to(torch.float32)
-
-        policy_token_logps, response_mask = compute_response_token_logps(
+        policy_token_logps, _ = compute_response_token_logps(
             all_logits,
-            concatenated_batch["concatenated_labels"],
-            concatenated_batch["concatenated_response_mask"],
-        )
-        reference_token_logps, _ = compute_response_token_logps(
-            reference_all_logits,
             concatenated_batch["concatenated_labels"],
             concatenated_batch["concatenated_response_mask"],
         )

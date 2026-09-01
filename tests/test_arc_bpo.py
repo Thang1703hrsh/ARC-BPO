@@ -6,6 +6,7 @@ import torch
 
 from loss.loss import arc_bpo_pair_loss, bregman_sba, sba_h, sba_h_prime
 from loss.loss_utils import (
+    compute_response_token_logps,
     compute_exact_chunk_log_ratios,
     construct_arc_bpo_one_sided_targets,
 )
@@ -13,6 +14,54 @@ from arc_bpo_chunking import retarget_chunk_spans_to_length
 
 
 class ArcBPOTest(unittest.TestCase):
+    def test_chunked_response_token_logps_match_full_log_softmax_and_gradients(self):
+        torch.manual_seed(7)
+        base_logits = torch.randn(2, 5, 11, dtype=torch.float64)
+        labels = torch.tensor(
+            [[-100, 1, 2, 3, 4], [-100, 5, -100, 7, 8]],
+            dtype=torch.long,
+        )
+        response_mask = torch.tensor(
+            [[0, 0, 1, 1, 1], [0, 1, 1, 0, 1]],
+            dtype=torch.long,
+        )
+
+        chunked_logits = base_logits.clone().requires_grad_(True)
+        actual, actual_mask = compute_response_token_logps(
+            chunked_logits,
+            labels,
+            response_mask,
+            row_chunk_size=2,
+        )
+        actual.sum().backward()
+
+        full_logits = base_logits.clone().requires_grad_(True)
+        shifted_labels = labels[:, 1:].clone()
+        expected_mask = response_mask[:, 1:].bool() & (shifted_labels != -100)
+        shifted_labels[~expected_mask] = 0
+        expected = torch.gather(
+            full_logits[:, :-1, :].log_softmax(-1),
+            dim=2,
+            index=shifted_labels.unsqueeze(2),
+        ).squeeze(2)
+        expected = expected * expected_mask
+        expected.sum().backward()
+
+        self.assertTrue(torch.equal(actual_mask, expected_mask))
+        self.assertTrue(torch.allclose(actual, expected, atol=1e-10, rtol=1e-10))
+        self.assertTrue(
+            torch.allclose(chunked_logits.grad, full_logits.grad, atol=1e-10, rtol=1e-10)
+        )
+
+    def test_chunked_response_token_logps_reject_nonpositive_chunk_size(self):
+        with self.assertRaisesRegex(ValueError, "row_chunk_size must be positive"):
+            compute_response_token_logps(
+                torch.randn(1, 2, 3),
+                torch.tensor([[-100, 1]]),
+                torch.tensor([[0, 1]]),
+                row_chunk_size=0,
+            )
+
     def test_chunk_log_ratios_telescope(self):
         policy = torch.tensor([-1.0, -2.0, -0.5, -3.0])
         reference = torch.tensor([-1.5, -1.0, -0.25, -2.0])
