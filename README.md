@@ -353,6 +353,38 @@ python diversity_metrics/compute_diversity.py \
   --out diversity_metrics/<run>/diversity_metrics.json
 ```
 
+For the reviewer-facing mechanism analysis, `analyze_credit_drift.py` measures
+full-vocabulary `KL(policy || reference)` at held-out response-token prefixes,
+aggregates it by the exact ARC-BPO semantic chunks, and reports Low/Medium/High
+credit groups, preference-pair bootstrap intervals, and Spearman correlations.
+It supports merged models and the LoRA `LATEST/adapter` checkpoints produced by
+the public launchers. See
+[`diversity_metrics/CREDIT_DRIFT.md`](diversity_metrics/CREDIT_DRIFT.md) for the
+credit-source distinction, installation, smoke test, and full-run commands.
+For the provided Llama-3-8B 10k LoRA checkpoint, the one-A100 Modal workflow is
+documented in [`diversity_metrics/MODAL.md`](diversity_metrics/MODAL.md).
+
+### Hyperparameter sensitivity
+
+The controlled `T`, `kappa`, `Delta0`, and SBA `lambda` pipeline is documented
+in [`sensitivity/README.md`](sensitivity/README.md). It audits one-factor config
+changes, persists a shared 20% label-noise realization, evaluates every final
+checkpoint with a hashed six-task protocol, and generates CSV/JSON summaries,
+PDF plots, and LaTeX tables. It intentionally refuses the public uniform main
+default because `T` and `kappa` are inactive unless advantage shaping is
+enabled; supply the resolved config from the actual advantage-enabled main run.
+
+### Allocation ablations
+
+The one-seed Llama-3-8B LoRA/10k/global-bs64 launcher and its controlled-study
+guardrails are documented in
+[`allocation_ablations/README.md`](allocation_ablations/README.md). The audit
+deliberately blocks the standalone `Advantage allocation` row because this
+repository does not yet define the distinct pre-SBA loss required by the
+reviewer plan; it never aliases that row to `A_tbpo` or another objective. The
+same guide includes the four-A100 Modal smoke/full workflow that preserves the
+original gradient-accumulation setting.
+
 ### MT-Bench
 
 MT-Bench support is provided through the vendored FastChat tree.
@@ -380,9 +412,9 @@ python -m unittest discover -s tests -v
 ```
 
 These tests cover chunk-ratio telescoping, calibrated one-sided targets,
-detached target construction, gradient direction, variable chunk counts, and
-the guard that ARC-BPO does not fall back to token-level matching or a value
-head.
+detached target construction, gradient direction, variable chunk counts,
+full-vocabulary policy/reference KL, clustered bootstrap grouping, and the
+guard that ARC-BPO does not fall back to token-level matching or a value head.
 <!-- 
 ## Citation
 

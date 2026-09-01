@@ -71,10 +71,15 @@ def load_resolved_config(path: str):
     return config
 
 
-def build_llama3_10k_bs64_base(repository_root: Path, output_root: Path, seed: int = 0):
+def build_llama3_10k_bs64_base(
+    repository_root: Path,
+    output_root: Path,
+    seed: int = 0,
+    gradient_accumulation_steps: int = 4,
+):
     """Build the exact advantage-enabled Llama-3 sensitivity baseline.
 
-    This preset is intentionally explicit so a four-GPU launcher does not need
+    This preset is intentionally explicit so a GPU launcher does not need
     to train a throwaway default run merely to obtain a resolved Hydra config.
     The generated config is still archived and audited like a config captured
     from a main run.
@@ -83,13 +88,19 @@ def build_llama3_10k_bs64_base(repository_root: Path, output_root: Path, seed: i
 
     repository_root = Path(repository_root).resolve()
     output_root = Path(output_root).resolve()
+    gradient_accumulation_steps = int(gradient_accumulation_steps)
+    if gradient_accumulation_steps <= 0:
+        raise ValueError("gradient_accumulation_steps must be positive.")
     config = OmegaConf.load(repository_root / "config" / "config.yaml")
     config.pop("defaults", None)
     config.model = OmegaConf.load(repository_root / "config" / "model" / "llama_8b.yaml")
     config.loss = OmegaConf.load(repository_root / "config" / "loss" / "arc_bpo.yaml")
 
     config.seed = int(seed)
-    config.exp_name = "arc-bpo-sensitivity-default-llama3-10k-bs64"
+    config.exp_name = (
+        "arc-bpo-sensitivity-default-llama3-10k-bs64-"
+        f"ga{gradient_accumulation_steps}"
+    )
     config.output_dir = str(output_root)
     config.local_run_dir = str(output_root / "base-config-only")
     config.fsdp_port = None
@@ -98,7 +109,7 @@ def build_llama3_10k_bs64_base(repository_root: Path, output_root: Path, seed: i
     config.dataset_train_split = "train"
     config.dataset_test_split = "test"
     config.batch_size = 64
-    config.gradient_accumulation_steps = 4
+    config.gradient_accumulation_steps = gradient_accumulation_steps
     config.n_examples = 10000
     config.n_epochs = None
     config.skip_examples = 0

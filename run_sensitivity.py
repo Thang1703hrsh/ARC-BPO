@@ -244,6 +244,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--noise_rate", type=float, default=0.20)
     parser.add_argument("--noise_seed", type=int, default=2026)
     parser.add_argument(
+        "--gradient_accumulation_steps",
+        type=int,
+        default=0,
+        help=(
+            "Override gradient accumulation for a built-in preset; 0 keeps the "
+            "preset default (4). This is rejected with --base_config."
+        ),
+    )
+    parser.add_argument(
         "--max_runs",
         type=int,
         default=0,
@@ -302,16 +311,25 @@ def main():
         raise ValueError("max_runs cannot be negative.")
     if args.expected_gpus < 0:
         raise ValueError("expected_gpus cannot be negative.")
+    if args.gradient_accumulation_steps < 0:
+        raise ValueError("gradient_accumulation_steps cannot be negative.")
+    if args.base_config and args.gradient_accumulation_steps:
+        raise ValueError(
+            "--gradient_accumulation_steps can only be used with --preset; "
+            "a supplied --base_config must remain unchanged."
+        )
 
     output_root = Path(args.output_root).resolve()
     output_root.mkdir(parents=True, exist_ok=True)
     if args.preset == "llama3-10k-bs64":
+        preset_grad_accum = args.gradient_accumulation_steps or 4
         base = build_llama3_10k_bs64_base(
             Path(__file__).resolve().parent,
             output_root,
             seed=parse_seeds(args.seeds)[0],
+            gradient_accumulation_steps=preset_grad_accum,
         )
-        base_source = "preset:llama3-10k-bs64"
+        base_source = f"preset:llama3-10k-bs64:grad_accum={preset_grad_accum}"
     else:
         base = load_resolved_config(args.base_config)
         base_source = str(Path(args.base_config).resolve())

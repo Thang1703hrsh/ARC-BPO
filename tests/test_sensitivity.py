@@ -21,6 +21,7 @@ except ModuleNotFoundError as error:
 from sensitivity.common import (
     RunSpec,
     audit_run_config,
+    build_llama3_10k_bs64_base,
     build_run_specs,
     normalize_base_config,
     patch_run_config,
@@ -65,6 +66,26 @@ def resolved_base(use_advantage_shape=True):
 
 @unittest.skipIf(OmegaConf is None, "omegaconf is an optional training dependency")
 class SensitivityConfigTest(unittest.TestCase):
+    def test_two_gpu_preset_keeps_global_and_per_gpu_batch_contract(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = build_llama3_10k_bs64_base(
+                Path(__file__).resolve().parents[1],
+                Path(temporary),
+                seed=0,
+                gradient_accumulation_steps=8,
+            )
+        self.assertEqual(base.batch_size, 64)
+        self.assertEqual(base.gradient_accumulation_steps, 8)
+        result = execution_preflight(
+            base,
+            visible_gpus=2,
+            gpu_names=["NVIDIA A100-SXM4-80GB"] * 2,
+            expected_gpus=2,
+            expected_gpu_name="A100",
+        )
+        self.assertEqual(result["per_gpu_microbatch"], 4)
+        self.assertEqual(result["optimizer_steps"], 157)
+
     def test_uniform_main_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "uniform allocation"):
             validate_sensitivity_base(resolved_base(use_advantage_shape=False))
@@ -168,6 +189,19 @@ class LabelNoiseManifestTest(unittest.TestCase):
 
 
 class EvaluationAndSummaryTest(unittest.TestCase):
+    def test_two_a100_preflight_preserves_microbatch_four(self):
+        config = SimpleNamespace(batch_size=64, gradient_accumulation_steps=8, n_examples=10000)
+        result = execution_preflight(
+            config,
+            visible_gpus=2,
+            gpu_names=["NVIDIA A100-SXM4-80GB"] * 2,
+            expected_gpus=2,
+            expected_gpu_name="A100",
+        )
+        self.assertEqual(result["global_batch_size"], 64)
+        self.assertEqual(result["per_gpu_microbatch"], 4)
+        self.assertEqual(result["optimizer_steps"], 157)
+
     def test_four_a100_preflight_reports_effective_batching(self):
         config = SimpleNamespace(batch_size=64, gradient_accumulation_steps=4, n_examples=10000)
         result = execution_preflight(

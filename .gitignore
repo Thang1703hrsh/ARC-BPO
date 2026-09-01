@@ -4,6 +4,7 @@ __pycache__/
 outputs/
 output/
 results/
+modal_results/
 runs/
 wandb/
 model_hub/
@@ -27,6 +28,7 @@ adapter_model*.bin
 *.md
 # Explicitly requested operational guide; keep all other new Markdown local.
 !SERVER_4XA100_UV_RUN_SENSITIVITY.md
+!SERVER_2XA100_UV_RUN_SENSITIVITY.md
 
 # Synthetic/simulated artifacts must not be published as real results.
 *simulated*
