@@ -127,7 +127,7 @@ def build_llama3_10k_bs64_base(
     config.warmup_ratio = 0.05
     config.max_length = 2048
     config.activation_checkpointing = True
-    config.save_checkpoint = True
+    config.save_checkpoint = False
     config.save_every_examples = 10000
     config.wandb.enabled = False
 
