@@ -163,6 +163,21 @@ Chỉ chạy toàn bộ 14 settings sau khi smoke run hoàn thành và không b�
 bash script/train/arc_bpo_sensitivity.sh full
 ```
 
+Nếu checkpoint local của bốn setting đầu đã bị xóa nhưng chúng đã được upload
+lên Hugging Face, có thể bỏ qua chúng và bắt đầu trực tiếp từ setting thứ 5:
+
+```bash
+mkdir -p "$PWD/outputs/hf_tmp"
+
+START_RUN=5 \
+TMPDIR="$PWD/outputs/hf_tmp" \
+bash script/train/arc_bpo_sensitivity.sh full
+```
+
+Lệnh này chạy đúng các setting 5--14 và không train lại settings 1--4. Manifest
+được tạo bởi lần chạy này chỉ chứa 10 settings đã chọn. Muốn evaluation cả 14
+settings vẫn cần tải bốn adapter đầu từ Hugging Face về server.
+
 Launcher đã đặt sẵn GPU `0,1`, 10k examples, global batch 64, accumulation 16,
 LoRA, seed 0, repo Hugging Face và chế độ chỉ upload adapter. Không cần export
 lại các giá trị này.

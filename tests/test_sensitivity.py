@@ -11,7 +11,12 @@ except ImportError:  # Minimal unit-test environments may omit training/Hydra de
     OmegaConf = None
 
 from evaluate_sensitivity import build_lm_eval_command, extract_task_score
-from run_sensitivity import execution_preflight, hf_checkpoint_path, upload_checkpoint_to_hf
+from run_sensitivity import (
+    execution_preflight,
+    hf_checkpoint_path,
+    select_run_range,
+    upload_checkpoint_to_hf,
+)
 try:
     from preference_datasets import get_batch_iterator
 except ModuleNotFoundError as error:
@@ -62,6 +67,38 @@ def resolved_base(use_advantage_shape=True):
             },
         }
     )
+
+
+class SensitivityRunRangeTest(unittest.TestCase):
+    def test_start_run_five_selects_jobs_five_through_fourteen(self):
+        base = SimpleNamespace(
+            loss=SimpleNamespace(T=2.0, kappa=2.0, delta_star=2.0, sba_lambda=1.0)
+        )
+        specs = build_run_specs(
+            base,
+            ("T", "kappa", "delta0", "lambda"),
+            (0,),
+            0.20,
+            include_default_points=False,
+        )
+        selected, total = select_run_range(specs, start_run=5, max_runs=0)
+        self.assertEqual(total, 14)
+        self.assertEqual(len(selected), 10)
+        self.assertEqual(selected[0].run_name, "sens_kappa_1.5_clean_seed0")
+        self.assertEqual(selected[-1].run_name, "sens_lambda_2_clean_seed0")
+
+    def test_start_run_combines_with_smoke_limit(self):
+        selected, total = select_run_range(
+            list(range(1, 15)),
+            start_run=5,
+            max_runs=1,
+        )
+        self.assertEqual(total, 14)
+        self.assertEqual(selected, [5])
+
+    def test_start_run_rejects_out_of_range(self):
+        with self.assertRaisesRegex(ValueError, "out of range"):
+            select_run_range(list(range(1, 15)), start_run=15, max_runs=0)
 
 
 @unittest.skipIf(OmegaConf is None, "omegaconf is an optional training dependency")

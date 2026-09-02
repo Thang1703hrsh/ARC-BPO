@@ -76,6 +76,22 @@ def hf_checkpoint_path(run_name: str) -> str:
     return f"checkpoints/{safe_name}"
 
 
+def select_run_range(specs, *, start_run: int, max_runs: int):
+    """Select a 1-based contiguous suffix/range while retaining total grid size."""
+    total_runs = len(specs)
+    if start_run < 1:
+        raise ValueError("start_run must be a positive 1-based index.")
+    if start_run > total_runs:
+        raise ValueError(
+            f"start_run={start_run} is out of range; the grid contains "
+            f"{total_runs} runs."
+        )
+    selected = list(specs[start_run - 1 :])
+    if max_runs:
+        selected = selected[:max_runs]
+    return selected, total_runs
+
+
 def execution_preflight(
     config,
     *,
@@ -259,6 +275,12 @@ def parse_args() -> argparse.Namespace:
         help="Limit generated runs for a launcher smoke test; 0 generates the full grid.",
     )
     parser.add_argument(
+        "--start_run",
+        type=int,
+        default=1,
+        help="Start at this 1-based position in the generated grid (default: 1).",
+    )
+    parser.add_argument(
         "--exclude_default_points",
         action="store_true",
         help=(
@@ -309,6 +331,8 @@ def main():
         raise ValueError("noise_rate must be strictly between zero and one.")
     if args.max_runs < 0:
         raise ValueError("max_runs cannot be negative.")
+    if args.start_run < 1:
+        raise ValueError("start_run must be a positive 1-based index.")
     if args.expected_gpus < 0:
         raise ValueError("expected_gpus cannot be negative.")
     if args.gradient_accumulation_steps < 0:
@@ -352,8 +376,12 @@ def main():
         args.noise_rate,
         include_default_points=not args.exclude_default_points,
     )
-    if args.max_runs:
-        specs = specs[: args.max_runs]
+    first_run_index = args.start_run
+    specs, total_runs = select_run_range(
+        specs,
+        start_run=first_run_index,
+        max_runs=args.max_runs,
+    )
 
     if args.execute:
         import torch
@@ -401,7 +429,7 @@ def main():
     audits: List[Dict[str, Any]] = []
     manifest_path = output_root / "run_manifest.csv"
 
-    for index, spec in enumerate(specs, start=1):
+    for index, spec in enumerate(specs, start=first_run_index):
         run_config = patch_run_config(
             base,
             spec,
@@ -443,15 +471,15 @@ def main():
         write_csv(manifest_path, manifest_rows, MANIFEST_FIELDS)
 
         if not args.execute:
-            print(f"[{index}/{len(specs)}] planned {spec.run_name}: {config_path}")
+            print(f"[{index}/{total_runs}] planned {spec.run_name}: {config_path}")
             continue
         if checkpoint_complete(checkpoint, bool(run_config.model.use_lora)) and not args.force:
             row["status"] = "checkpoint_exists"
             write_csv(manifest_path, manifest_rows, MANIFEST_FIELDS)
-            print(f"[{index}/{len(specs)}] skipping existing checkpoint: {checkpoint}")
+            print(f"[{index}/{total_runs}] skipping existing checkpoint: {checkpoint}")
         else:
             command = [sys.executable, "train_resolved_config.py", "--config", str(config_path)]
-            print(f"[{index}/{len(specs)}] training {spec.run_name}")
+            print(f"[{index}/{total_runs}] training {spec.run_name}")
             row["status"] = "running"
             write_csv(manifest_path, manifest_rows, MANIFEST_FIELDS)
             try:
@@ -472,7 +500,7 @@ def main():
 
         if hf_api is not None:
             print(
-                f"[{index}/{len(specs)}] uploading {spec.run_name} to "
+                f"[{index}/{total_runs}] uploading {spec.run_name} to "
                 f"{args.hf_repo_id}/{row['hf_path']}"
             )
             row["hf_status"] = "uploading"

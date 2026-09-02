@@ -24,6 +24,7 @@ MODE:
 Common overrides:
   GPU_IDS=0,1
   GRAD_ACCUM=16
+  START_RUN=1
   OUTPUT_ROOT=outputs/sensitivity/llama3-10k-bs64-2xa100-ga16
   HF_REPO_ID=ducthang1703/llama3-arc-bpo-sensitivity-10k-bs64-2xa100-ga16
   HF_PRIVATE=false
@@ -96,6 +97,7 @@ fi
 N_EXAMPLES="${N_EXAMPLES:-10000}"
 BATCH_SIZE="${BATCH_SIZE:-64}"
 GRAD_ACCUM="${GRAD_ACCUM:-16}"
+START_RUN="${START_RUN:-1}"
 SEEDS="${SEEDS:-0}"
 USE_LORA="${USE_LORA:-true}"
 N_EVAL_EXAMPLES="${N_EVAL_EXAMPLES:-0}"
@@ -114,6 +116,10 @@ if is_true "${DO_FIRST_EVAL}"; then
 fi
 if ! [[ "${GRAD_ACCUM}" =~ ^[1-9][0-9]*$ ]]; then
   echo "ERROR: GRAD_ACCUM must be a positive integer." >&2
+  exit 1
+fi
+if ! [[ "${START_RUN}" =~ ^[1-9][0-9]*$ ]]; then
+  echo "ERROR: START_RUN must be a positive 1-based index." >&2
   exit 1
 fi
 
@@ -139,6 +145,7 @@ echo "[MODE] ${MODE}"
 echo "[GPUS] CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES} (${NUM_GPUS} GPUs)"
 echo "[BATCH] global=${BATCH_SIZE} grad_accum=${GRAD_ACCUM} per_gpu_microbatch=$((BATCH_SIZE / DIVISOR))"
 echo "[DATA] nominal_examples=${N_EXAMPLES} seeds=${SEEDS} noise_rate=${NOISE_RATE}"
+echo "[GRID] starting_at_run=${START_RUN}"
 echo "[OUTPUT] ${OUTPUT_ROOT}"
 
 ensure_hf_auth() {
@@ -183,6 +190,7 @@ COMMON_ARGS=(
   --seeds "${SEEDS}"
   --noise_rate "${NOISE_RATE}"
   --noise_seed "${NOISE_SEED}"
+  --start_run "${START_RUN}"
   --expected_gpus "${EXPECTED_GPUS}"
   --expected_gpu_name "${EXPECTED_GPU_NAME}"
 )
