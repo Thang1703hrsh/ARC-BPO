@@ -62,6 +62,22 @@ def bregman_sba(
     )
 
 
+def bregman_quadratic(
+    target_ratio: torch.Tensor,
+    model_ratio: torch.Tensor,
+) -> torch.Tensor:
+    """Canonical base-Bregman divergence for allocation-only ablations.
+
+    The generator is h(r) = 0.5 * r^2, hence
+    D_h(target, model) = 0.5 * (target - model)^2.  Keeping this objective
+    fixed between uniform and advantage allocation isolates the allocation
+    change; switching from ``quadratic`` to ``sba`` then isolates SBA.
+    """
+    if target_ratio.shape != model_ratio.shape:
+        raise ValueError("ARC-BPO target and model ratios must have the same shape.")
+    return 0.5 * (target_ratio - model_ratio).square()
+
+
 def arc_bpo_pair_loss(
     chosen_chunk_log_ratios: torch.FloatTensor,
     rejected_chunk_log_ratios: torch.FloatTensor,
@@ -75,6 +91,7 @@ def arc_bpo_pair_loss(
     winsorize_advantages: bool = True,
     lam: float = 1.0,
     s: float = 4.0,
+    divergence: str = "sba",
     exp_clip: float = 30.0,
     verify_calibration: bool = True,
 ) -> tuple[torch.FloatTensor, dict]:
@@ -116,18 +133,28 @@ def arc_bpo_pair_loss(
     chosen_target_ratio = torch.exp(-tau_w.clamp(-exp_clip, exp_clip))
     rejected_target_ratio = torch.exp(-tau_l.clamp(-exp_clip, exp_clip))
 
-    chosen_losses = bregman_sba(
-        chosen_target_ratio,
-        chosen_model_ratio,
-        lam=lam,
-        s=s,
-    )
-    rejected_losses = bregman_sba(
-        rejected_target_ratio,
-        rejected_model_ratio,
-        lam=lam,
-        s=s,
-    )
+    divergence = str(divergence).strip().lower()
+    if divergence == "sba":
+        chosen_losses = bregman_sba(
+            chosen_target_ratio,
+            chosen_model_ratio,
+            lam=lam,
+            s=s,
+        )
+        rejected_losses = bregman_sba(
+            rejected_target_ratio,
+            rejected_model_ratio,
+            lam=lam,
+            s=s,
+        )
+    elif divergence in {"quadratic", "base", "l2"}:
+        chosen_losses = bregman_quadratic(chosen_target_ratio, chosen_model_ratio)
+        rejected_losses = bregman_quadratic(rejected_target_ratio, rejected_model_ratio)
+    else:
+        raise ValueError(
+            "Unknown ARC-BPO divergence "
+            f"{divergence!r}; expected 'quadratic' or 'sba'."
+        )
     loss = chosen_losses.mean() + rejected_losses.mean()
 
     outputs = {
@@ -141,6 +168,7 @@ def arc_bpo_pair_loss(
         "rejected_target_ratio": rejected_target_ratio,
         "chosen_losses": chosen_losses,
         "rejected_losses": rejected_losses,
+        "divergence": divergence,
         "target_margin": tau_w.sum() - tau_l.sum(),
         "model_margin": chosen_chunk_log_ratios.sum() - rejected_chunk_log_ratios.sum(),
     }

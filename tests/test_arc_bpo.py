@@ -4,7 +4,13 @@ import unittest
 
 import torch
 
-from loss.loss import arc_bpo_pair_loss, bregman_sba, sba_h, sba_h_prime
+from loss.loss import (
+    arc_bpo_pair_loss,
+    bregman_quadratic,
+    bregman_sba,
+    sba_h,
+    sba_h_prime,
+)
 from loss.loss_utils import (
     compute_exact_chunk_log_ratios,
     construct_arc_bpo_one_sided_targets,
@@ -160,6 +166,31 @@ class ArcBPOTest(unittest.TestCase):
         exact = bregman_sba(target, model, lam=0.0, s=scale)
         near = bregman_sba(target, model, lam=1e-6, s=scale)
         self.assertTrue(torch.allclose(exact, near, atol=2e-7, rtol=2e-6))
+
+    def test_quadratic_base_bregman_is_exact_squared_distance(self):
+        target = torch.tensor([0.5, 1.5], dtype=torch.float64)
+        model = torch.tensor([1.0, 0.5], dtype=torch.float64)
+        expected = 0.5 * (target - model).square()
+        self.assertTrue(torch.equal(bregman_quadratic(target, model), expected))
+
+    def test_advantage_allocation_can_use_quadratic_objective(self):
+        chosen = torch.tensor([0.1, 0.2], requires_grad=True)
+        rejected = torch.tensor([-0.1, -0.2], requires_grad=True)
+        loss, output = arc_bpo_pair_loss(
+            chosen,
+            rejected,
+            delta_star=2.0,
+            chosen_advantages=torch.tensor([0.2, 1.0]),
+            rejected_advantages=torch.tensor([0.7, -0.1]),
+            use_advantage_shape=True,
+            winsorize_advantages=False,
+            divergence="quadratic",
+        )
+        loss.backward()
+        self.assertEqual(output["divergence"], "quadratic")
+        self.assertTrue(torch.isfinite(loss))
+        self.assertIsNotNone(chosen.grad)
+        self.assertIsNotNone(rejected.grad)
 
     def test_chunk_spans_retarget_to_shifted_response_logprob_length(self):
         spans = retarget_chunk_spans_to_length([(0, 7)], n_tokens=6)

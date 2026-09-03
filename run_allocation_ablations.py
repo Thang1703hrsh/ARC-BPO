@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
-"""Audit and launch the one-seed Llama-3-8B allocation ablations.
+"""Audit and launch the one-seed Mistral-7B-v0.1 allocation ablations.
 
-The launcher is intentionally strict about the reviewer plan.  The current
-repository implements uniform targets and advantage-shaped targets with the
-SBA generator, but it does not implement a distinct pre-SBA ``advantage``
-loss.  That requested row is therefore reported as blocked instead of being
-silently aliased to another method.
+Uniform and standalone advantage allocation use the canonical quadratic
+base-Bregman objective.  The next row changes only that objective to SBA, so
+the three runnable rows isolate allocation and divergence in sequence.
 """
 
 from __future__ import annotations
@@ -23,24 +21,16 @@ from typing import Dict, Iterable, List, Mapping, Sequence
 
 
 REPO_ROOT = Path(__file__).resolve().parent
-TRAIN_SCRIPT = REPO_ROOT / "script" / "train" / "arc_bpo_llama.sh"
+TRAIN_SCRIPT = REPO_ROOT / "script" / "train" / "arc_bpo_mistral.sh"
 DEFAULT_OUTPUT_ROOT = "outputs/ablations"
 DEFAULT_UNIFORM_CHECKPOINT = (
-    "ducthang1703/llama3-arc-bpo-uniform-lora-10k-bs64"
+    "ducthang1703/mistral7b-arc-bpo-uniform-lora-16k-bs64-seed0"
 )
 ALL_VARIANTS = (
     "uniform",
     "advantage",
     "advantage_sba_no_winsor",
 )
-
-ADVANTAGE_BLOCKER = (
-    "The repository has no distinct pre-SBA/base-Bregman ARC-BPO loss for the "
-    "reviewer row 'Advantage allocation'. arc_bpo_pair_loss always applies "
-    "bregman_sba, while A_tbpo/BPO_SBA change the objective and chunk semantics. "
-    "Per the plan, this row must not be invented or aliased."
-)
-
 
 @dataclass(frozen=True)
 class Variant:
@@ -55,6 +45,7 @@ VARIANTS: Mapping[str, Variant] = {
         name="uniform",
         supported=True,
         env_patch={
+            "ARC_DIVERGENCE": "quadratic",
             "USE_ADVANTAGE_SHAPE": "false",
             "FALLBACK_TO_UNIFORM_SHAPE": "false",
             # Winsorization is inapplicable when the shape is uniform. Pinning
@@ -64,14 +55,19 @@ VARIANTS: Mapping[str, Variant] = {
     ),
     "advantage": Variant(
         name="advantage",
-        supported=False,
-        env_patch={},
-        reason=ADVANTAGE_BLOCKER,
+        supported=True,
+        env_patch={
+            "ARC_DIVERGENCE": "quadratic",
+            "USE_ADVANTAGE_SHAPE": "true",
+            "FALLBACK_TO_UNIFORM_SHAPE": "false",
+            "WINSORIZE_ADVANTAGES": "false",
+        },
     ),
     "advantage_sba_no_winsor": Variant(
         name="advantage_sba_no_winsor",
         supported=True,
         env_patch={
+            "ARC_DIVERGENCE": "sba",
             "USE_ADVANTAGE_SHAPE": "true",
             # Missing/mismatched ArmoRM scores must fail instead of silently
             # turning this run into the uniform ablation.
@@ -122,7 +118,7 @@ def base_environment(
     gpu_ids: str,
     grad_accum: int,
     output_root: Path,
-    n_examples: int = 10000,
+    n_examples: int = 16000,
     global_batch_size: int = 64,
     base_revision: str = "",
     dataset_revision: str = "",
@@ -139,13 +135,13 @@ def base_environment(
             f"got {grad_accum} * {gpu_count}."
         )
     environment = {
-        # Exact public Llama setting associated with the supplied uniform
-        # checkpoint. Every new ablation starts from this SFT base, never from
-        # the already preference-tuned uniform adapter.
-        "MODEL_CONFIG": "llama_8b",
-        "DATASETS_RAW": "princeton-nlp/llama3-ultrafeedback-armorm",
-        "TRAIN_SPLIT": "train",
-        "TEST_SPLIT": "test",
+        # Mistral keeps the Llama allocation study's controlled optimizer,
+        # batching, LoRA, and 16k settings. UltraFeedback Binarized exposes
+        # score_chosen/score_rejected for strict advantage allocation.
+        "MODEL_CONFIG": "mistral_7b",
+        "DATASETS_RAW": "HuggingFaceH4/ultrafeedback_binarized",
+        "TRAIN_SPLIT": "train_prefs",
+        "TEST_SPLIT": "test_prefs",
         "SEED": str(seed),
         "GPU_IDS": gpu_ids,
         "BATCH_SIZE": str(global_batch_size),
@@ -163,14 +159,17 @@ def base_environment(
         "ACTIVATION_CHECKPOINTING": "true",
         "N_EVAL_EXAMPLES": "0",
         "DO_FIRST_EVAL": "false",
-        "SAVE_CHECKPOINT": "true",
-        "SAVE_EVERY_EXAMPLES": "5000",
+        # Disable periodic 5k/10k/15k snapshots. train.py always saves one
+        # final LATEST checkpoint after training, which Modal then uploads.
+        "SAVE_CHECKPOINT": "false",
+        "SAVE_EVERY_EXAMPLES": "0",
         "BETA": "0.1",
         "DELTA_STAR": "2.5",
         "ARC_T": "2.0",
         "KAPPA": "2.0",
         "SBA_LAMBDA": "1.0",
         "SBA_SCALE": "4.0",
+        "ARC_DIVERGENCE": "sba",
         "EXP_CLIP": "30.0",
         "MIN_TOKENS_PER_CHUNK": "4",
         "MAX_TOKENS_PER_CHUNK": "64",
@@ -196,9 +195,9 @@ def run_environment(
     env = dict(base)
     env.update(variant.env_patch)
     n_examples = int(env["N_EXAMPLES"])
-    example_label = "10k" if n_examples == 10000 else f"{n_examples}examples"
+    example_label = "16k" if n_examples == 16000 else f"{n_examples}examples"
     run_name = (
-        f"llama3_lora_{example_label}_bs{env['BATCH_SIZE']}_"
+        f"mistral7b_lora_{example_label}_bs{env['BATCH_SIZE']}_"
         f"{variant.name}_seed{seed}"
     )
     run_dir = (output_root / "runs" / run_name).resolve()
@@ -253,8 +252,8 @@ def write_manifest(path: Path, rows: Iterable[Mapping[str, str]]) -> None:
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Plan/audit the Llama-3-8B LoRA 10k, global-bs64 allocation "
-            "ablations with exactly one matched seed."
+            "Plan/audit the Mistral-7B-v0.1 LoRA allocation ablations with "
+            "exactly one matched seed."
         )
     )
     parser.add_argument(
@@ -278,8 +277,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--n_examples",
         type=int,
-        default=10000,
-        help="Default 10000; a smaller value is intended only for smoke tests.",
+        default=16000,
+        help="Default 16000; a smaller value is intended only for smoke tests.",
     )
     parser.add_argument(
         "--global_batch_size",
@@ -398,10 +397,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     audit = {
         "one_seed": [args.seed],
-        "model": "RLHFlow/LLaMA3-SFT-v2",
+        "model": "HuggingFaceH4/mistral-7b-sft-alpha",
         "model_revision": args.base_revision or None,
         "initialization": "fresh LoRA on common SFT base; never the uniform adapter",
-        "dataset": "princeton-nlp/llama3-ultrafeedback-armorm",
+        "dataset": "HuggingFaceH4/ultrafeedback_binarized",
         "dataset_revision": args.dataset_revision or None,
         "n_examples": args.n_examples,
         "global_batch_size": args.global_batch_size,
@@ -409,6 +408,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         "gpu_ids": args.gpu_ids,
         "uniform_checkpoint_reference": args.uniform_checkpoint,
         "requested_variants": variants,
+        "base_bregman": {
+            "name": "quadratic",
+            "generator": "h(r)=0.5*r^2",
+            "divergence": "0.5*(target_ratio-model_ratio)^2",
+        },
         "blocked_variants": {variant.name: variant.reason for variant in blocked},
         "config_diffs": diffs,
         "config_diffs_scope": "expected launcher settings, not unverified external metadata",

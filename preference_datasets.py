@@ -386,7 +386,9 @@ def get_batch_iterator(
         datasets.logging.set_verbosity_error()
 
     with TemporarilySeededRandom(seed):
-        permutation_seeds = iter(np.random.randint(0, 2**32, size=1000000).tolist())
+        permutation_seeds = iter(
+            np.random.randint(0, 2**32, size=1000000, dtype=np.uint64).tolist()
+        )
         flat_data = []
         noise_seed = seed if label_noise_seed is None else int(label_noise_seed)
         noisy_pair_count = 0

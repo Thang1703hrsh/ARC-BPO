@@ -16,6 +16,7 @@ from peft import LoraConfig, PeftModel, TaskType, get_peft_model
 
 import trainers
 from baseline_head import BaselineHead
+from huggingface_utils import push_final_checkpoint_to_hub
 from utils import (
     build_exp_name,
     disable_dropout,
@@ -173,6 +174,16 @@ def worker_main(
         print("Finished training", rank)
 
     trainer.save()
+    if rank == 0:
+        upload = push_final_checkpoint_to_hub(
+            config,
+            config.local_run_dir,
+            use_lora=bool(getattr(config.model, "use_lora", False)),
+        )
+        if upload["status"] == "uploaded":
+            print(f"Pushed final checkpoint to {upload['url']}")
+    if dist.is_initialized():
+        dist.barrier()
     # clean up
     if dist.is_initialized():
         dist.destroy_process_group()
