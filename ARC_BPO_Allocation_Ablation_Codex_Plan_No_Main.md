@@ -181,9 +181,13 @@ This row should correspond to the repository's existing definition of:
 "Advantage allocation"
 ```
 
-If the current codebase has a distinct pre-SBA / base-Bregman variant used for this ablation, use that existing implementation.
+The implemented pre-SBA/base-Bregman variant uses the canonical quadratic
+generator `h(r) = 0.5 r^2`, hence
+`D_h(target, model) = 0.5 (target - model)^2`. Uniform and advantage allocation
+both use this base divergence, so their comparison changes allocation only.
 
-Do **not** invent a new loss definition merely to create this row.
+Do **not** replace this explicit quadratic definition with TBPO or another
+objective merely to create the row.
 
 The goal is to reproduce the exact intended component progression:
 
@@ -197,7 +201,8 @@ Advantage + SBA
 Advantage + SBA + winsorization
 ```
 
-If the repository does not currently distinguish `Advantage allocation` from `Advantage + SBA`, Codex should stop and report this rather than silently inventing a distinction.
+The repository distinguishes `Advantage allocation` from `Advantage + SBA`
+with the explicit `loss.divergence=quadratic|sba` setting.
 
 ---
 
@@ -437,6 +442,7 @@ Example `uniform.yaml`:
 ablation:
   name: uniform
   allocation: uniform
+  divergence: quadratic
   winsorization: false
 ```
 
@@ -446,6 +452,8 @@ Example `advantage.yaml`:
 ablation:
   name: advantage
   allocation: advantage
+  divergence: quadratic
+  winsorization: false
 ```
 
 Example `advantage_sba_no_winsor.yaml`:
@@ -454,7 +462,7 @@ Example `advantage_sba_no_winsor.yaml`:
 ablation:
   name: advantage_sba_no_winsor
   allocation: advantage
-  use_sba: true
+  divergence: sba
   winsorization: false
 ```
 
@@ -913,7 +921,7 @@ Do not:
 - use different seeds across variants;
 - compare runs from incompatible checkpoints or data splits;
 - treat "Advantage allocation vs main" as the winsorization-only comparison;
-- invent an "Advantage allocation" loss definition if the codebase does not already define it;
+- replace the documented quadratic base-Bregman definition with TBPO or another objective;
 - manually edit scores to create a monotonic progression.
 ```
 

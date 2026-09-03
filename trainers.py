@@ -775,6 +775,7 @@ class BasicTrainer(object):
                 ),
                 lam=float(getattr(loss_config, "sba_lambda", 1.0)),
                 s=float(getattr(loss_config, "sba_scale", 4.0)),
+                divergence=str(getattr(loss_config, "divergence", "sba")),
                 exp_clip=float(getattr(loss_config, "exp_clip", 30.0)),
             )
             pair_outputs["chosen_seq_log_ratio"] = chosen_seq_log_ratio.detach()

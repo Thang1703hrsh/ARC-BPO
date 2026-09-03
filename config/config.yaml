@@ -29,6 +29,16 @@ wandb:
   entity: "Token_BPO"
   project: "token_bpo"
 
+# Optional final-checkpoint upload. A short repo_id is resolved under the
+# user's Hugging Face namespace; no upload occurs unless push_to_hub is true.
+huggingface:
+  push_to_hub: false
+  namespace: ducthang1703
+  repo_id: null
+  private: true
+  adapter_only: true
+  commit_message: "Upload ARC-BPO final checkpoint"
+
 # to create the local run directory and cache models/datasets,
 #   we will try each of these directories in order; if none exist,
 #   we will create the last one and use it

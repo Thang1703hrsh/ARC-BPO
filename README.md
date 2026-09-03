@@ -273,15 +273,27 @@ For LoRA runs, the adapter is saved under:
 output/<run_name>/LATEST/adapter
 ```
 
-If `HF_REPO_ID` is set, the script uploads the selected checkpoint folder to:
+If `HF_REPO_ID` is set, `train.py` uploads its own final checkpoint directly.
+A short repository name is placed under the default `ducthang1703` namespace;
+a full `owner/repo` id is used unchanged:
 
 ```text
-https://huggingface.co/<HF_REPO_ID>
+https://huggingface.co/ducthang1703/<short-repo-name>
 ```
 
 With `USE_LORA=true` and `HF_UPLOAD_ADAPTER_ONLY=true`, only the adapter folder
 is uploaded. With `USE_LORA=false`, or `HF_UPLOAD_ADAPTER_ONLY=false`, the whole
 `LATEST` folder is uploaded.
+
+The equivalent direct Hydra configuration is:
+
+```bash
+python train.py ... \
+  huggingface.push_to_hub=true \
+  huggingface.repo_id=ducthang1703/my-arc-bpo-model \
+  huggingface.private=true \
+  huggingface.adapter_only=true
+```
 
 ## Evaluation
 
@@ -376,14 +388,14 @@ enabled; supply the resolved config from the actual advantage-enabled main run.
 
 ### Allocation ablations
 
-The one-seed Llama-3-8B LoRA/10k/global-bs64 launcher and its controlled-study
+The one-seed Mistral-7B-v0.1 LoRA/16k/global-bs64 launcher and its controlled-study
 guardrails are documented in
-[`allocation_ablations/README.md`](allocation_ablations/README.md). The audit
-deliberately blocks the standalone `Advantage allocation` row because this
-repository does not yet define the distinct pre-SBA loss required by the
-reviewer plan; it never aliases that row to `A_tbpo` or another objective. The
-same guide includes the four-A100 Modal smoke/full workflow that preserves the
-original gradient-accumulation setting.
+[`allocation_ablations/README.md`](allocation_ablations/README.md). Standalone
+`Advantage allocation` uses an explicit quadratic base-Bregman divergence;
+the next row changes only the divergence to SBA. Neither row aliases to
+`A_tbpo` or another token-matching objective. The
+same guide includes the one-H100 Modal smoke/full workflow with global batch 64
+and a memory-safe microbatch of one.
 
 ### MT-Bench
 

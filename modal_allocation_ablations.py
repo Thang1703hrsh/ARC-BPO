@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the one-seed ARC-BPO allocation ablation on four Modal A100-80GBs."""
+"""Run Mistral-7B-v0.1 ARC-BPO allocation ablations on Modal."""
 
 from __future__ import annotations
 
@@ -9,12 +9,14 @@ from pathlib import Path
 import modal
 
 
-APP_NAME = "arc-bpo-allocation-ablation"
-GPU_TYPE = "A100-80GB:4"
-GPU_COUNT = 4
-BASE_MODEL = "RLHFlow/LLaMA3-SFT-v2"
-DATASET_REPO = "princeton-nlp/llama3-ultrafeedback-armorm"
-UNIFORM_CHECKPOINT = "ducthang1703/llama3-arc-bpo-uniform-lora-10k-bs64"
+APP_NAME = "arc-bpo-mistral-allocation-ablation"
+GPU_TYPE = "H100!"
+GPU_COUNT = 1
+CPU_COUNT = 4.0
+MEMORY_MIB = 64 * 1024
+BASE_MODEL = "HuggingFaceH4/mistral-7b-sft-alpha"
+DATASET_REPO = "HuggingFaceH4/ultrafeedback_binarized"
+UNIFORM_CHECKPOINT = "ducthang1703/mistral7b-arc-bpo-uniform-lora-16k-bs64-seed0"
 
 REMOTE_REPO = "/root/arc-bpo"
 CACHE_ROOT = "/cache"
@@ -23,7 +25,7 @@ _HERE = Path(__file__).resolve().parent
 
 cache_volume = modal.Volume.from_name("arc-bpo-hf-cache", create_if_missing=True)
 results_volume = modal.Volume.from_name(
-    "arc-bpo-allocation-ablation-results",
+    "arc-bpo-mistral-allocation-ablation-results",
     create_if_missing=True,
 )
 
@@ -83,8 +85,12 @@ image = (
         remote_path=f"{REMOTE_REPO}/arc_bpo_scores.py",
     )
     .add_local_file(
-        str(_HERE / "script" / "train" / "arc_bpo_llama.sh"),
-        remote_path=f"{REMOTE_REPO}/script/train/arc_bpo_llama.sh",
+        str(_HERE / "huggingface_utils.py"),
+        remote_path=f"{REMOTE_REPO}/huggingface_utils.py",
+    )
+    .add_local_file(
+        str(_HERE / "script" / "train" / "arc_bpo_mistral.sh"),
+        remote_path=f"{REMOTE_REPO}/script/train/arc_bpo_mistral.sh",
     )
     .add_local_dir(str(_HERE / "config"), remote_path=f"{REMOTE_REPO}/config")
     .add_local_dir(str(_HERE / "loss"), remote_path=f"{REMOTE_REPO}/loss")
@@ -119,6 +125,8 @@ def _same_run(existing: dict, current: dict) -> bool:
         "global_batch_size",
         "gradient_accumulation_steps",
         "gpu_type",
+        "cpu_count",
+        "memory_mib",
     )
     return all(existing.get(key) == current.get(key) for key in keys)
 
@@ -161,7 +169,7 @@ def _stream_command(command: list[str], log_path: Path) -> None:
 def _resolve_hf_metadata(config: dict) -> dict:
     import os
 
-    from huggingface_hub import HfApi, snapshot_download
+    from huggingface_hub import HfApi
 
     token = os.environ.get("HF_TOKEN")
     api = HfApi(token=token)
@@ -170,45 +178,13 @@ def _resolve_hf_metadata(config: dict) -> dict:
         DATASET_REPO,
         revision=config["dataset_revision"] or None,
     )
-    uniform_info = api.model_info(
-        config["uniform_checkpoint"],
-        revision=config["uniform_revision"] or None,
-    )
-
-    uniform_snapshot = (
-        Path(CACHE_ROOT)
-        / "snapshots"
-        / "uniform_reference"
-        / _slug(config["uniform_checkpoint"])
-        / str(uniform_info.sha)
-    )
-    snapshot_download(
-        repo_id=config["uniform_checkpoint"],
-        revision=str(uniform_info.sha),
-        local_dir=uniform_snapshot,
-        allow_patterns=["adapter_config.json", "*/adapter_config.json", "README.md"],
-        token=token,
-    )
-    adapter_configs = sorted(uniform_snapshot.rglob("adapter_config.json"))
-    if len(adapter_configs) != 1:
-        raise RuntimeError(
-            "Expected exactly one adapter_config.json in uniform checkpoint "
-            f"{config['uniform_checkpoint']!r}, found {len(adapter_configs)}."
-        )
-    adapter_config = json.loads(adapter_configs[0].read_text(encoding="utf-8"))
-    recorded_base = str(adapter_config.get("base_model_name_or_path", ""))
-    if recorded_base.rstrip("/").lower() != BASE_MODEL.rstrip("/").lower():
-        raise ValueError(
-            "Uniform adapter base mismatch: "
-            f"recorded={recorded_base!r}, expected={BASE_MODEL!r}."
-        )
     cache_volume.commit()
     return {
         "base_revision": str(base_info.sha),
         "dataset_revision": str(dataset_info.sha),
-        "uniform_revision": str(uniform_info.sha),
-        "uniform_adapter_config": str(adapter_configs[0]),
-        "uniform_recorded_base": recorded_base,
+        "uniform_revision": str(config.get("uniform_revision") or ""),
+        "uniform_adapter_config": None,
+        "uniform_recorded_base": None,
     }
 
 
@@ -265,9 +241,7 @@ def _upload_adapter(adapter: Path, run_dir: Path, output_root: Path, config: dic
         upload_folder(
             repo_id=repo_id,
             folder_path=export,
-            commit_message=(
-                "Upload one-seed ARC-BPO advantage+SBA no-winsor LoRA checkpoint"
-            ),
+            commit_message=f"Upload ARC-BPO {config['variant']} LoRA checkpoint",
             token=token,
         )
     return {
@@ -281,8 +255,8 @@ def _upload_adapter(adapter: Path, run_dir: Path, output_root: Path, config: dic
 @app.function(
     image=image,
     gpu=GPU_TYPE,
-    cpu=16.0,
-    memory=262144,
+    cpu=CPU_COUNT,
+    memory=MEMORY_MIB,
     timeout=24 * 60 * 60,
     max_containers=1,
     secrets=[hf_secret],
@@ -306,22 +280,17 @@ def train_allocation_ablation(config: dict) -> dict:
     invalid = [
         (name, memory)
         for name, memory in zip(gpu_names, gpu_memory_gib)
-        if "A100" not in name.upper() or memory < 70
+        if "H100" not in name.upper() or memory < 70
     ]
     if invalid:
-        raise RuntimeError(f"Expected four A100-80GB GPUs; incompatible devices: {invalid}")
+        raise RuntimeError(f"Expected one H100-80GB GPU; incompatible devices: {invalid}")
     print(
         f"[gpu] names={gpu_names}; memory_gib={gpu_memory_gib}; count={GPU_COUNT}",
         flush=True,
     )
 
     variant = str(config["variant"])
-    if variant == "advantage":
-        raise ValueError(
-            "The standalone Advantage allocation row is blocked: the repository "
-            "does not define its distinct pre-SBA loss."
-        )
-    if variant not in {"uniform", "advantage_sba_no_winsor"}:
+    if variant not in {"uniform", "advantage", "advantage_sba_no_winsor"}:
         raise ValueError(f"Unsupported Modal allocation variant: {variant!r}.")
     if int(config["global_batch_size"]) != 64:
         raise ValueError("This Modal setting is pinned to global batch size 64.")
@@ -346,11 +315,14 @@ def train_allocation_ablation(config: dict) -> dict:
         "gpu_name": gpu_names,
         "gpu_memory_gib": gpu_memory_gib,
         "gpu_count": GPU_COUNT,
+        "cpu_count": CPU_COUNT,
+        "memory_mib": MEMORY_MIB,
         "microbatch_per_gpu": (
             int(config["global_batch_size"])
             // (int(config["gradient_accumulation_steps"]) * GPU_COUNT)
         ),
-        "initialization": "fresh LoRA on RLHFlow/LLaMA3-SFT-v2",
+        "initialization": "fresh LoRA on HuggingFaceH4/mistral-7b-sft-alpha",
+        "checkpoint_policy": "final 16k checkpoint only; no intermediate snapshots",
         "uniform_checkpoint_role": "existing result reference only; never initialization",
         "output_root": str(output_root),
         "started_at": datetime.now(timezone.utc).isoformat(),
@@ -367,10 +339,7 @@ def train_allocation_ablation(config: dict) -> dict:
     config_path.write_text(json.dumps(run_config, indent=2) + "\n", encoding="utf-8")
     results_volume.commit()
 
-    if variant == "uniform":
-        variants_arg = "uniform"
-    else:
-        variants_arg = "uniform,advantage_sba_no_winsor"
+    variants_arg = variant
 
     command = [
         sys.executable,
@@ -380,7 +349,7 @@ def train_allocation_ablation(config: dict) -> dict:
         "--seed",
         str(config["seed"]),
         "--gpu_ids",
-        "0,1,2,3",
+        "0",
         "--grad_accum",
         str(config["gradient_accumulation_steps"]),
         "--n_examples",
@@ -397,8 +366,6 @@ def train_allocation_ablation(config: dict) -> dict:
         str(config["uniform_checkpoint"]),
         "--execute",
     ]
-    if variant != "uniform":
-        command.append("--reuse_uniform_checkpoint")
     if config["force"]:
         command.append("--force")
 
@@ -464,7 +431,7 @@ def train_allocation_ablation(config: dict) -> dict:
 def main(
     mode: str = "smoke",
     variant: str = "advantage_sba_no_winsor",
-    output_name: str = "llama3-allocation-ablation-bs64-seed0",
+    output_name: str = "",
     uniform_checkpoint: str = UNIFORM_CHECKPOINT,
     uniform_revision: str = "",
     base_revision: str = "",
@@ -472,15 +439,16 @@ def main(
     seed: int = 0,
     n_examples: int = -1,
     global_batch_size: int = 64,
-    gradient_accumulation_steps: int = 4,
+    gradient_accumulation_steps: int = 64,
     hf_repo_id: str = "",
     hf_private: bool = True,
     force: bool = False,
+    background: bool = False,
 ):
     if mode == "smoke":
         effective_examples = 64 if n_examples < 0 else n_examples
     elif mode == "full":
-        effective_examples = 10000 if n_examples < 0 else n_examples
+        effective_examples = 16000 if n_examples < 0 else n_examples
     else:
         raise ValueError("--mode must be smoke or full.")
     if effective_examples <= 0:
@@ -489,13 +457,20 @@ def main(
         raise ValueError("--gradient-accumulation-steps must be positive.")
     if global_batch_size % (gradient_accumulation_steps * GPU_COUNT) != 0:
         raise ValueError(
-            "Global batch size must be divisible by gradient accumulation steps * 4 GPUs."
+            "Global batch size must be divisible by gradient accumulation steps * GPU count."
+        )
+
+    effective_output_name = output_name.strip()
+    if not effective_output_name:
+        dataset_label = "16k" if effective_examples == 16000 else f"{effective_examples}examples"
+        effective_output_name = (
+            f"mistral7b-{variant}-lora-{dataset_label}-bs{global_batch_size}-seed{seed}"
         )
 
     config = {
         "mode": mode,
         "variant": variant,
-        "output_name": output_name,
+        "output_name": effective_output_name,
         "uniform_checkpoint": uniform_checkpoint,
         "uniform_revision": uniform_revision,
         "base_revision": base_revision,
@@ -508,5 +483,9 @@ def main(
         "hf_private": hf_private,
         "force": force,
     }
-    result = train_allocation_ablation.remote(config)
-    print(json.dumps(result, indent=2, ensure_ascii=False))
+    if background:
+        call = train_allocation_ablation.spawn(config)
+        print(json.dumps({"status": "submitted", "call_id": call.object_id}, indent=2))
+    else:
+        result = train_allocation_ablation.remote(config)
+        print(json.dumps(result, indent=2, ensure_ascii=False))

@@ -81,6 +81,8 @@ USE_BASELINE_HEAD="false"
 HF_REPO_ID="${HF_REPO_ID:-}"
 HF_PRIVATE="${HF_PRIVATE:-true}"
 HF_UPLOAD_ADAPTER_ONLY="${HF_UPLOAD_ADAPTER_ONLY:-true}"
+HF_PUSH_TO_HUB=false
+if [[ -n "${HF_REPO_ID}" ]]; then HF_PUSH_TO_HUB=true; fi
 
 # --- ARC-BPO loss hyperparameters (Llama-3-8B / Llama3-UltraFeedback-ArmoRM) ---
 # Base 8B SFT checkpoint. The data loader maps Princeton's aligned
@@ -92,6 +94,7 @@ ARC_T="${ARC_T:-2.0}"
 KAPPA="${KAPPA:-2.0}"
 SBA_LAMBDA="${SBA_LAMBDA:-1.0}"
 SBA_SCALE="${SBA_SCALE:-4.0}"
+ARC_DIVERGENCE="${ARC_DIVERGENCE:-sba}"
 EXP_CLIP="${EXP_CLIP:-30.0}"
 # Uniform remains the public default. Controlled advantage runs should set
 # USE_ADVANTAGE_SHAPE=true and FALLBACK_TO_UNIFORM_SHAPE=false.
@@ -124,6 +127,7 @@ CMD=(
   loss.kappa="${KAPPA}"
   loss.sba_lambda="${SBA_LAMBDA}"
   loss.sba_scale="${SBA_SCALE}"
+  loss.divergence="${ARC_DIVERGENCE}"
   loss.exp_clip="${EXP_CLIP}"
   loss.use_advantage_shape="${USE_ADVANTAGE_SHAPE}"
   loss.fallback_to_uniform_shape="${FALLBACK_TO_UNIFORM_SHAPE}"
@@ -154,6 +158,11 @@ CMD=(
   activation_checkpointing="${ACTIVATION_CHECKPOINTING}"
   seed="${SEED}"
   wandb.enabled=false
+  huggingface.push_to_hub="${HF_PUSH_TO_HUB}"
+  huggingface.namespace="ducthang1703"
+  huggingface.repo_id="${HF_REPO_ID:-null}"
+  huggingface.private="${HF_PRIVATE}"
+  huggingface.adapter_only="${HF_UPLOAD_ADAPTER_ONLY}"
 )
 
 if [[ -n "${EXP_NAME}" ]]; then
@@ -174,56 +183,3 @@ printf '[RUN]'
 printf ' %q' "${CMD[@]}"
 printf '\n'
 "${CMD[@]}" 2>&1 | tee "${TRAIN_LOG}"
-
-if [[ -n "${HF_REPO_ID}" ]]; then
-  export HF_REPO_ID HF_PRIVATE HF_UPLOAD_ADAPTER_ONLY OUTPUT_DIR USE_LORA
-  python3 - <<'PY'
-import os
-
-from huggingface_hub import HfApi, upload_folder
-
-
-def as_bool(value: str) -> bool:
-    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
-
-
-output_dir = os.environ["OUTPUT_DIR"]
-repo_id = os.environ["HF_REPO_ID"]
-hf_private = as_bool(os.environ.get("HF_PRIVATE", "true"))
-use_lora = as_bool(os.environ.get("USE_LORA", "true"))
-upload_adapter_only = as_bool(os.environ.get("HF_UPLOAD_ADAPTER_ONLY", "true"))
-
-latest_dirs = []
-for root, dirs, _ in os.walk(output_dir):
-    if "LATEST" in dirs:
-        latest_path = os.path.join(root, "LATEST")
-        latest_dirs.append((os.path.getmtime(latest_path), latest_path))
-
-if not latest_dirs:
-    raise RuntimeError(f"No LATEST checkpoint found under {output_dir}")
-
-latest_path = max(latest_dirs)[1]
-upload_path = latest_path
-if use_lora and upload_adapter_only:
-    upload_path = os.path.join(latest_path, "adapter")
-    adapter_config = os.path.join(upload_path, "adapter_config.json")
-    adapter_model = os.path.join(upload_path, "adapter_model.safetensors")
-    if not os.path.isfile(adapter_config):
-        raise RuntimeError(f"No LoRA adapter_config.json found at {upload_path}")
-    if not os.path.isfile(adapter_model) or os.path.getsize(adapter_model) <= 1024:
-        raise RuntimeError(
-            f"LoRA adapter_model.safetensors is missing or too small: {adapter_model}"
-        )
-
-print(f"[HF UPLOAD] repo={repo_id}")
-print(f"[HF UPLOAD] folder={upload_path}")
-api = HfApi()
-api.create_repo(repo_id, private=hf_private, exist_ok=True)
-upload_folder(
-    repo_id=repo_id,
-    folder_path=upload_path,
-    commit_message="Upload ARC-BPO LLaMA checkpoint",
-)
-print(f"[HF UPLOAD] Done: https://huggingface.co/{repo_id}")
-PY
-fi

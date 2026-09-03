@@ -14,6 +14,9 @@ T: 2.0
 kappa: 2.0
 
 # SBA Bregman divergence.
+# ``quadratic`` is the explicit base-Bregman objective used by the allocation
+# ablations; the ARC-BPO main objective remains ``sba``.
+divergence: sba
 sba_lambda: 1.0
 sba_scale: 4.0
 exp_clip: 30.0

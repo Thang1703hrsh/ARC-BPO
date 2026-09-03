@@ -23,10 +23,17 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/output}"
 LOG_DIR="${LOG_DIR:-${OUTPUT_DIR}/logs}"
 
+cd "${REPO_ROOT}"
+
 MODEL_CONFIG="${MODEL_CONFIG:-mistral_7b}"
+MODEL_REVISION="${MODEL_REVISION:-}"
 DATASETS_RAW="${DATASETS_RAW:-HuggingFaceH4/ultrafeedback_binarized}"
+DATASET_REVISION="${DATASET_REVISION:-}"
 TRAIN_SPLIT="${TRAIN_SPLIT:-train_prefs}"
 TEST_SPLIT="${TEST_SPLIT:-test_prefs}"
+SEED="${SEED:-0}"
+EXP_NAME="${EXP_NAME:-}"
+RUN_DIR="${RUN_DIR:-}"
 
 # --- Batch sizing (auto, scales with GPU count) ---------------------------
 # Per-GPU microbatch is the real memory knob: per_gpu = BATCH_SIZE/GRAD_ACCUM/NUM_GPUS.
@@ -72,24 +79,27 @@ USE_BASELINE_HEAD="false"
 HF_REPO_ID="${HF_REPO_ID:-}"
 HF_PRIVATE="${HF_PRIVATE:-true}"
 HF_UPLOAD_ADAPTER_ONLY="${HF_UPLOAD_ADAPTER_ONLY:-true}"
+HF_PUSH_TO_HUB=false
+if [[ -n "${HF_REPO_ID}" ]]; then HF_PUSH_TO_HUB=true; fi
 
 # --- ARC-BPO loss hyperparameters (Mistral-7B-v0.1 / UltraFeedback Binarized) ---
-# Base 7B SFT checkpoint on hard binary labels. UFB has no smooth reward gap,
-# so delta_star is a fixed finite margin (spec sec. 6). We nudge it above the
-# 2.0 default to give the weakly-aligned base model a stronger preference
-# signal without destabilizing the SBA matching.
+# Base 7B SFT checkpoint with binary preference labels. Keep delta_star as a
+# fixed finite margin (spec sec. 6); the response scores affect chunk-credit
+# allocation, not this pairwise preference margin.
 BETA="${BETA:-0.1}"
 DELTA_STAR="${DELTA_STAR:-2.5}"
 ARC_T="${ARC_T:-2.0}"
 KAPPA="${KAPPA:-2.0}"
 SBA_LAMBDA="${SBA_LAMBDA:-1.0}"
 SBA_SCALE="${SBA_SCALE:-4.0}"
+ARC_DIVERGENCE="${ARC_DIVERGENCE:-sba}"
 EXP_CLIP="${EXP_CLIP:-30.0}"
-# NOTE: the data pipeline does not currently emit an advantage proxy, so
-# use_advantage_shape=true would silently fall back to uniform. We keep it
-# false to be faithful to the actual (uniform-shape) behavior.
+# UltraFeedback Binarized exposes score_chosen/score_rejected, which the data
+# pipeline converts into detached chunk-level advantage proxies. Controlled
+# advantage runs set FALLBACK_TO_UNIFORM_SHAPE=false so missing scores fail.
 USE_ADVANTAGE_SHAPE="${USE_ADVANTAGE_SHAPE:-false}"
 FALLBACK_TO_UNIFORM_SHAPE="${FALLBACK_TO_UNIFORM_SHAPE:-true}"
+WINSORIZE_ADVANTAGES="${WINSORIZE_ADVANTAGES:-true}"
 
 # Deterministic chunker floor/ceiling (matches experiments.md: min 4 / max 64).
 MIN_TOKENS_PER_CHUNK="${MIN_TOKENS_PER_CHUNK:-4}"
@@ -116,9 +126,11 @@ CMD=(
   loss.kappa="${KAPPA}"
   loss.sba_lambda="${SBA_LAMBDA}"
   loss.sba_scale="${SBA_SCALE}"
+  loss.divergence="${ARC_DIVERGENCE}"
   loss.exp_clip="${EXP_CLIP}"
   loss.use_advantage_shape="${USE_ADVANTAGE_SHAPE}"
   loss.fallback_to_uniform_shape="${FALLBACK_TO_UNIFORM_SHAPE}"
+  loss.winsorize_advantages="${WINSORIZE_ADVANTAGES}"
   loss.min_tokens_per_chunk="${MIN_TOKENS_PER_CHUNK}"
   loss.max_tokens_per_chunk="${MAX_TOKENS_PER_CHUNK}"
   output_dir="${OUTPUT_DIR}"
@@ -143,64 +155,30 @@ CMD=(
   save_every_examples="${SAVE_EVERY_EXAMPLES}"
   do_first_eval="${DO_FIRST_EVAL}"
   activation_checkpointing="${ACTIVATION_CHECKPOINTING}"
+  seed="${SEED}"
   wandb.enabled=false
+  huggingface.push_to_hub="${HF_PUSH_TO_HUB}"
+  huggingface.namespace="ducthang1703"
+  huggingface.repo_id="${HF_REPO_ID:-null}"
+  huggingface.private="${HF_PRIVATE}"
+  huggingface.adapter_only="${HF_UPLOAD_ADAPTER_ONLY}"
 )
+
+if [[ -n "${EXP_NAME}" ]]; then
+  CMD+=(exp_name="${EXP_NAME}")
+fi
+if [[ -n "${RUN_DIR}" ]]; then
+  CMD+=(local_run_dir="${RUN_DIR}")
+fi
+if [[ -n "${MODEL_REVISION}" ]]; then
+  CMD+=(model.revision="${MODEL_REVISION}")
+fi
+if [[ -n "${DATASET_REVISION}" ]]; then
+  CMD+=(dataset_revision="${DATASET_REVISION}")
+fi
 
 echo "[LOG] ${TRAIN_LOG}"
 printf '[RUN]'
 printf ' %q' "${CMD[@]}"
 printf '\n'
 "${CMD[@]}" 2>&1 | tee "${TRAIN_LOG}"
-
-if [[ -n "${HF_REPO_ID}" ]]; then
-  export HF_REPO_ID HF_PRIVATE HF_UPLOAD_ADAPTER_ONLY OUTPUT_DIR USE_LORA
-  python3 - <<'PY'
-import os
-
-from huggingface_hub import HfApi, upload_folder
-
-
-def as_bool(value: str) -> bool:
-    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
-
-
-output_dir = os.environ["OUTPUT_DIR"]
-repo_id = os.environ["HF_REPO_ID"]
-hf_private = as_bool(os.environ.get("HF_PRIVATE", "true"))
-use_lora = as_bool(os.environ.get("USE_LORA", "true"))
-upload_adapter_only = as_bool(os.environ.get("HF_UPLOAD_ADAPTER_ONLY", "true"))
-
-latest_dirs = []
-for root, dirs, _ in os.walk(output_dir):
-    if "LATEST" in dirs:
-        latest_path = os.path.join(root, "LATEST")
-        latest_dirs.append((os.path.getmtime(latest_path), latest_path))
-
-if not latest_dirs:
-    raise RuntimeError(f"No LATEST checkpoint found under {output_dir}")
-
-latest_path = max(latest_dirs)[1]
-upload_path = latest_path
-if use_lora and upload_adapter_only:
-    upload_path = os.path.join(latest_path, "adapter")
-    adapter_config = os.path.join(upload_path, "adapter_config.json")
-    adapter_model = os.path.join(upload_path, "adapter_model.safetensors")
-    if not os.path.isfile(adapter_config):
-        raise RuntimeError(f"No LoRA adapter_config.json found at {upload_path}")
-    if not os.path.isfile(adapter_model) or os.path.getsize(adapter_model) <= 1024:
-        raise RuntimeError(
-            f"LoRA adapter_model.safetensors is missing or too small: {adapter_model}"
-        )
-
-print(f"[HF UPLOAD] repo={repo_id}")
-print(f"[HF UPLOAD] folder={upload_path}")
-api = HfApi()
-api.create_repo(repo_id, private=hf_private, exist_ok=True)
-upload_folder(
-    repo_id=repo_id,
-    folder_path=upload_path,
-    commit_message="Upload ARC-BPO Mistral checkpoint",
-)
-print(f"[HF UPLOAD] Done: https://huggingface.co/{repo_id}")
-PY
-fi
